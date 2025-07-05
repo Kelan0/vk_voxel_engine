@@ -6,10 +6,9 @@ pub mod ticker;
 pub mod input_handler;
 pub mod app;
 
-pub use window::Window;
-pub use ticker::Ticker;
-pub use ticker::Tickable;
+pub use app::App;
 pub use input_handler::InputHandler;
 pub use input_handler::Key;
-pub use input_handler::MouseBtn;
-pub use app::App;
+pub use ticker::Tickable;
+pub use ticker::Ticker;
+pub use window::Window;
