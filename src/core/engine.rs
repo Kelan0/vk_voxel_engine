@@ -2,6 +2,9 @@ use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::Renderer;
 use anyhow::Result;
 use log::{error, info};
+use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use vulkano::format::ClearValue;
+use crate::core::renderer::{BeginFrameResult, SecondaryCommandBuffer};
 
 pub struct Engine {
     pub window: Window,
@@ -101,8 +104,37 @@ impl Tickable for Engine {
             let size = self.window.get_window_size_in_pixels();
             self.renderer.set_resolution(size.x as u32, size.y as u32)?;
         }
+
+        let clear_values = vec![Some(ClearValue::Float([1.0, 1.0, 0.0, 1.0]))];
+        // let clear_values = vec![None];
+
+        if ticker.time_since_last_dbg() >= 1.0 {
+            self.renderer.debug_print_ref_counts();
+        }
         
-        self.renderer.pre_render()?;
+        match self.renderer.begin_frame() {
+            BeginFrameResult::Begin(mut cmd_buf) => {
+                let framebuffer = self.renderer.get_current_framebuffer();
+                let render_pass = self.renderer.get_render_pass();
+
+
+                cmd_buf.begin_render_pass(RenderPassBeginInfo{
+                    clear_values,
+                    ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+                }, SubpassBeginInfo{
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                })?;
+
+
+                cmd_buf.end_render_pass(SubpassEndInfo::default())?;
+
+                self.renderer.present_frame(cmd_buf)?;
+            }
+            BeginFrameResult::Skip => {}
+            BeginFrameResult::Err(err) => return Err(err)
+        }
+        
 
         let mut user_app = std::mem::take(&mut self.user_app);
         user_app.as_mut().unwrap().tick(ticker, self)?;

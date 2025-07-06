@@ -68,15 +68,15 @@ impl Window {
     }
 
     pub fn update(&mut self) {
-        self.sdl_canvas.set_draw_color(Color::RGB(0, 255, 255));
-        self.sdl_canvas.clear();
-        self.sdl_canvas.present();
+        // self.sdl_canvas.set_draw_color(Color::RGB(0, 255, 255));
+        // self.sdl_canvas.clear();
+        // self.sdl_canvas.present();
 
         let mut event_pump = self.sdl_ctx.event_pump().unwrap();
 
         self.did_resize = false;
         
-        self.sdl_canvas.clear();
+        // self.sdl_canvas.clear();
         self.input_handler.update();
 
         let is_window_focused = true; // Application::instance()->isWindowFocused()
@@ -119,7 +119,7 @@ impl Window {
 
             self.input_handler.process_event(&event);
         }
-        self.sdl_canvas.present();
+        // self.sdl_canvas.present();
     }
 
     pub fn sdl_window_handle(&self) -> &SdlWindow {

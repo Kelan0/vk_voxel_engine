@@ -12,6 +12,7 @@ pub struct Ticker<'a> {
     last_time: Instant,
     last_tick: Instant,
     last_dbg: Instant,
+    tick_start_time: Instant,
     auto_stop: bool, // Automatically kill the ticker if the tick_list is empty 
     desired_tick_rate: f64,
     measured_tick_rate: f64,
@@ -27,7 +28,7 @@ pub struct Ticker<'a> {
     last_idle_time: f64,
     partial_tick: f64,
     tick_list: Vec<&'a mut dyn Tickable>,
-    result: Option<Result<()>>
+    result: Option<Result<()>>,
 }
 
 pub trait Tickable {
@@ -48,6 +49,7 @@ impl<'a> Ticker<'a> {
             last_time: now,
             last_tick: now,
             last_dbg: now,
+            tick_start_time: now,
             desired_tick_rate,
             auto_stop,
             measured_tick_rate: 0.0,
@@ -144,9 +146,9 @@ impl<'a> Ticker<'a> {
             return false;
         }
         
-        let tick_start_time = Instant::now();
-        let elapsed_time = tick_start_time.duration_since(self.last_time).as_secs_f64();
-        self.last_time = tick_start_time;
+        self.tick_start_time = Instant::now();
+        let elapsed_time = self.tick_start_time.duration_since(self.last_time).as_secs_f64();
+        self.last_time = self.tick_start_time;
 
         let desired_tick_rate = if self.desired_tick_rate < 1e-6 { 1000.0 } else { self.desired_tick_rate };
         let expected_tick_duration: f64 = 1.0 / desired_tick_rate;
@@ -154,8 +156,8 @@ impl<'a> Ticker<'a> {
         self.partial_tick += elapsed_time / expected_tick_duration;
 
         if self.partial_tick >= 1.0 {
-            self.delta_time = tick_start_time.duration_since(self.last_tick).as_secs_f64();
-            self.last_tick = tick_start_time;
+            self.delta_time = self.tick_start_time.duration_since(self.last_tick).as_secs_f64();
+            self.last_tick = self.tick_start_time;
             self.partial_tick -= 1.0;
 
             self.result = Some(self.tick());
@@ -166,9 +168,9 @@ impl<'a> Ticker<'a> {
             self.tick_rate_count += 1;
             self.simulation_time += expected_tick_duration;
 
-            let time_since_dbg = tick_start_time.duration_since(self.last_dbg).as_secs_f64();
+            let time_since_dbg = self.time_since_last_dbg();
             if time_since_dbg >= 1.0 {
-                self.real_time = tick_start_time.duration_since(self.start_time).as_secs_f64();
+                self.real_time = self.tick_start_time.duration_since(self.start_time).as_secs_f64();
                 let missed_time = self.real_time - self.simulation_time;
                 self.accumulated_missed_time += missed_time - self.last_missed_time;
                 self.last_missed_time = missed_time;
@@ -179,7 +181,7 @@ impl<'a> Ticker<'a> {
                 self.last_idle_time = self.idle_time;
 
                 debug!("{:.5} UPDATES PER SECOND - {:.5} sec lost - idle for {:.2} sec", self.measured_tick_rate, missed_time, self.measured_idle_time);
-                self.last_dbg = tick_start_time;
+                self.last_dbg = self.tick_start_time;
                 self.tick_rate_count = 0;
 
 
@@ -191,7 +193,7 @@ impl<'a> Ticker<'a> {
             }
 
             let tick_end_time = Instant::now();
-            let current_tick_duration = tick_end_time.duration_since(tick_start_time).as_secs_f64();
+            let current_tick_duration = tick_end_time.duration_since(self.tick_start_time).as_secs_f64();
             let remaining_tick_duration = expected_tick_duration - current_tick_duration;
 
             if remaining_tick_duration > 0.0 {
@@ -281,6 +283,10 @@ impl<'a> Ticker<'a> {
     
     pub fn get_result(&self) -> Option<&Result<()>> {
         self.result.as_ref()
+    }
+    
+    pub fn time_since_last_dbg(&self) -> f64 {
+        self.tick_start_time.duration_since(self.last_dbg).as_secs_f64()
     }
     
     pub fn take_result(&mut self) -> Result<()> {

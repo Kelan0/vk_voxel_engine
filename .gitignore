@@ -1,1 +1,18 @@
 /target
+/src - Copy/application/app.rs
+/src/core/renderer/command_buffer.rs
+/src - Copy/core/renderer/command_buffer.rs
+/src - Copy/core/renderer/command_pool.rs
+/src - Copy/core/engine.rs
+/src - Copy/core/renderer/framebuffer.rs
+/src - Copy/core/renderer/image_view.rs
+/src - Copy/application/input_handler.rs
+/src - Copy/main.rs
+/src - Copy/application/mod.rs
+/src - Copy/core/renderer/mod.rs
+/src - Copy/core/mod.rs
+/src - Copy/util/mod.rs
+/src - Copy/core/renderer/render_pass.rs
+/src - Copy/core/renderer/renderer.rs
+/src - Copy/application/ticker.rs
+/src - Copy/application/window.rs
