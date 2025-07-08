@@ -1,6 +1,11 @@
+mod graphics_manager;
+mod forward_renderer;
 mod renderer;
-pub use renderer::Renderer;
+mod graphics_pipeline;
 
-pub use renderer::SecondaryCommandBuffer;
+pub use graphics_manager::GraphicsManager;
 
-pub use renderer::BeginFrameResult;
+pub(crate) use graphics_manager::RecreateSwapchainEvent;
+pub(crate) use graphics_manager::BeginFrameResult;
+pub(crate) use graphics_manager::PrimaryCommandBuffer;
+pub(crate) use graphics_manager::SecondaryCommandBuffer;

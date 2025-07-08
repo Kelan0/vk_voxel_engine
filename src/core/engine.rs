@@ -1,28 +1,37 @@
 use crate::application::{App, Tickable, Ticker, Window};
-use crate::core::Renderer;
+use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
+use crate::core::{GraphicsManager, RecreateSwapchainEvent};
 use anyhow::Result;
-use log::{error, info};
-use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use log::{debug, error, info};
+use shrev::ReaderId;
+use vulkano::command_buffer::{PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
 use vulkano::format::ClearValue;
-use crate::core::renderer::{BeginFrameResult, SecondaryCommandBuffer};
 
 pub struct Engine {
+    // pub rt: Runtime,
     pub window: Window,
-    pub renderer: Renderer,
+    pub graphics: GraphicsManager,
     user_app: Option<Box<dyn App>>,
 }
 
+pub struct RenderContext<'a> {
+    pub engine: &'a mut Engine,
+    pub cmd_buf: &'a mut PrimaryCommandBuffer,
+}
+
 impl Engine {
-    // fn new<T>(user_app: T, update_loop: &'static mut Ticker) -> Result<Self, String>
-    // where T: App + 'static {
+
     fn new<T>(user_app: T) -> Result<Self>
     where T: App + 'static {
         info!("Starting engine");
 
+        // info!("Initializing Tokio runtime");
+        // let rt = Runtime::new()?;
+
         let window = Window::new("Test Game", 640, 480)
             .inspect_err(|_| error!("Failed to create application window"))?;
 
-        let renderer = Renderer::new(window.sdl_window_handle())
+        let graphics = GraphicsManager::new(window.sdl_window_handle())
             .inspect_err(|_| error!("Failed to initialize renderer"))?;
 
         // let user_app = Some(user_app);
@@ -30,8 +39,9 @@ impl Engine {
         let user_app = Some(user_app as Box<dyn App>);
 
         let app = Engine {
+            // rt,
             window,
-            renderer,
+            graphics,
             user_app,
         };
 
@@ -49,6 +59,9 @@ impl Engine {
         let app = Engine::new(user_app)?;
         let app = Box::leak(Box::new(app)); // app lives forever
 
+        // let a = app.user_app.as_ref().unwrap();
+        // a.register_events(app)?;
+
         update_loop.add_tickable(app);
         update_loop.start_blocking();
 
@@ -60,12 +73,12 @@ impl Engine {
         if let Err(e) = Self::start_internal(user_app) {
             error!("An error occurred during engine execution");
             error!("Root cause: {}", e.root_cause());
-            
+
             let chain = e.chain();
             for e in chain {
                 error!("{e}");
             }
-            
+
             // let mut src = e.source();
             // while let Some(e) = src {
             //     error!("{e}");
@@ -77,14 +90,55 @@ impl Engine {
     pub fn user_app(&self) -> &dyn App {
         self.user_app.as_ref().unwrap().as_ref()
     }
+
+    fn pre_render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+
+        if ticker.time_since_last_dbg() >= 1.0 {
+            self.graphics.debug_print_ref_counts();
+        }
+
+        let mut user_app = std::mem::take(&mut self.user_app);
+        user_app.as_mut().unwrap().pre_render(ticker, self, cmd_buf)?;
+        self.user_app = user_app;
+
+        Ok(())
+    }
+
+    fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+        let clear_values = vec![Some(ClearValue::Float([1.0, 1.0, 0.0, 1.0]))];
+
+        let framebuffer = self.graphics.get_current_framebuffer();
+
+        cmd_buf.begin_render_pass(RenderPassBeginInfo{
+            clear_values,
+            ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+        }, SubpassBeginInfo{
+            contents: SubpassContents::Inline,
+            ..Default::default()
+        })?;
+
+        let mut user_app = std::mem::take(&mut self.user_app);
+        user_app.as_mut().unwrap().render(ticker, self, cmd_buf)?;
+        self.user_app = user_app;
+
+        cmd_buf.end_render_pass(SubpassEndInfo::default())?;
+
+        Ok(())
+    }
+
 }
 
 impl Tickable for Engine {
     fn init(&mut self, ticker: &mut Ticker) -> Result<()> {
 
-        self.renderer.init()?;
+        self.graphics.init()?;
 
         {
+            let mut user_app = std::mem::take(&mut self.user_app);
+            let result = user_app.as_mut().unwrap().register_events(self);
+            self.user_app = user_app;
+            result?;
+
             let mut user_app = std::mem::take(&mut self.user_app);
             let result = user_app.as_mut().unwrap().init(ticker, self);
             self.user_app = user_app;
@@ -102,44 +156,21 @@ impl Tickable for Engine {
         }
         if self.window.did_resize() {
             let size = self.window.get_window_size_in_pixels();
-            self.renderer.set_resolution(size.x as u32, size.y as u32)?;
+            self.graphics.set_resolution(size.x as u32, size.y as u32)?;
         }
 
-        let clear_values = vec![Some(ClearValue::Float([1.0, 1.0, 0.0, 1.0]))];
-        // let clear_values = vec![None];
-
-        if ticker.time_since_last_dbg() >= 1.0 {
-            self.renderer.debug_print_ref_counts();
-        }
-        
-        match self.renderer.begin_frame() {
+        match self.graphics.begin_frame() {
             BeginFrameResult::Begin(mut cmd_buf) => {
-                let framebuffer = self.renderer.get_current_framebuffer();
-                let render_pass = self.renderer.get_render_pass();
 
+                self.pre_render(ticker, &mut cmd_buf)?;
+                self.render(ticker, &mut cmd_buf)?;
 
-                cmd_buf.begin_render_pass(RenderPassBeginInfo{
-                    clear_values,
-                    ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
-                }, SubpassBeginInfo{
-                    contents: SubpassContents::Inline,
-                    ..Default::default()
-                })?;
-
-
-                cmd_buf.end_render_pass(SubpassEndInfo::default())?;
-
-                self.renderer.present_frame(cmd_buf)?;
+                self.graphics.present_frame(cmd_buf)?;
             }
             BeginFrameResult::Skip => {}
             BeginFrameResult::Err(err) => return Err(err)
         }
-        
 
-        let mut user_app = std::mem::take(&mut self.user_app);
-        user_app.as_mut().unwrap().tick(ticker, self)?;
-        self.user_app = user_app;
-        
         Ok(())
     }
 

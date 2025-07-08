@@ -2,9 +2,11 @@
 #![allow(dead_code)]
 mod engine;
 mod renderer;
+mod event;
 
-pub use engine::Engine;
-pub use renderer::Renderer;
+pub(crate) use engine::*;
+pub(crate) use renderer::*;
+pub(crate) use event::*;
 
 extern crate pretty_env_logger;
 // #[macro_use] extern crate log;
