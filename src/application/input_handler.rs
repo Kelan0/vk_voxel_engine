@@ -4,11 +4,11 @@ use sdl3::event::Event;
 use sdl3::keyboard::Scancode;
 use sdl3::mouse::MouseWheelDirection;
 
-const USE_SCANCODES: bool = false;
+const USE_SCANCODES: bool = true;
 const KEYBOARD_SIZE: usize = Scancode::Count as usize;
 const MOUSE_SIZE: usize = 16;
 
-pub use sdl3::keyboard::Keycode as Key;
+pub use sdl3::keyboard::Scancode as Key;
 pub use sdl3::mouse::MouseButton as MouseBtn;
 
 pub struct InputHandler {

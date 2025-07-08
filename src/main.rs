@@ -3,60 +3,63 @@ mod core;
 mod util;
 
 use crate::application::Key;
-use crate::core::{PrimaryCommandBuffer, RecreateSwapchainEvent};
+use crate::core::{GraphicsManager, GraphicsPipeline, GraphicsPipelineConfiguration, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent};
 use anyhow::{anyhow, Result};
 use application::ticker::Ticker;
 use application::App;
 use core::Engine;
-use foldhash::HashSet;
+use foldhash::{HashMap};
 use log::{debug, info};
-use shaderc::{CompilationArtifact, ShaderKind};
-use smallvec::smallvec;
-use std::cmp::Ordering::{Equal, Greater, Less};
+use shaderc::{CompileOptions, ShaderKind};
+use shrev::ReaderId;
 use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use shrev::ReaderId;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
-use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
-use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::buffer::BufferContents;
+use vulkano::pipeline::{DynamicState, PipelineCreateFlags};
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState};
-use vulkano::pipeline::graphics::tessellation::TessellationState;
-use vulkano::pipeline::graphics::vertex_input::{BuffersDefinition, Vertex, VertexDefinition, VertexInputBindingDescription, VertexInputState};
-use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
-use vulkano::pipeline::layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo};
-use vulkano::pipeline::{DynamicState, GraphicsPipeline, PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::render_pass::Subpass;
-use vulkano::shader::{EntryPoint, ShaderModule, ShaderModuleCreateInfo};
+use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
 struct BaseVertex {
     #[format(R32G32_SFLOAT)]
     position: [f32; 2],
+    #[format(R32G32B32_SFLOAT)]
+    colour: [f32; 3],
 }
 
 struct TestGame {
-    graphics_pipeline: Option<Arc<GraphicsPipeline>>,
-    vertex_buffer: Option<Subbuffer<[BaseVertex]>>,
-    event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>
+    solid_graphics_pipeline: Option<GraphicsPipeline>,
+    wire_graphics_pipeline: Option<GraphicsPipeline>,
+    mesh: Option<Mesh<BaseVertex>>,
+    event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
+    wire_state: TestWireframeState,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum TestWireframeState {
+    Solid,
+    Wire,
+    Both,
 }
 
 impl TestGame {
     fn new() -> Self {
         TestGame {
-            graphics_pipeline: None,
-            vertex_buffer: None,
+            solid_graphics_pipeline: None,
+            wire_graphics_pipeline: None,
+            mesh: None,
             event_recreate_swapchain: None,
+            wire_state: TestWireframeState::Solid,
         }
     }
 
-    fn on_recreate_swapchain(&mut self, engine: &Engine) {
-        self.init_pipeline_test(engine).expect("Failed to create GraphicsPipeline");
+    fn on_recreate_swapchain(&mut self, engine: &Engine) -> Result<()> {
+        self.init_pipeline_test(engine)
     }
 
     fn init_pipeline_test(&mut self, engine: &Engine) -> Result<()> {
@@ -65,109 +68,63 @@ impl TestGame {
         let render_pass = engine.graphics.get_render_pass();
 
 
-        let vs = {
-            let compiled_code = compile_to_spirv("res/shaders/test_vert.glsl", ShaderKind::Vertex, "main");
-            let bytes = compiled_code.as_binary_u8();
-            let shader_code = vulkano::shader::spirv::bytes_to_words(&bytes)?;
+        let mut shader_source = String::new();
+        let mut file = File::open("./res/shaders/test.glsl")?;
+        file.read_to_string(&mut shader_source)?;
 
-            let shader_create_info = ShaderModuleCreateInfo::new(&shader_code);
-            let shader_module = unsafe { ShaderModule::new(device.clone(), shader_create_info) }?;
-            shader_module.entry_point("main").unwrap()
-        };
-        let fs = {
-            let compiled_code = compile_to_spirv("res/shaders/test_frag.glsl", ShaderKind::Fragment, "main");
-            let bytes = compiled_code.as_binary_u8();
-            let shader_code = vulkano::shader::spirv::bytes_to_words(&bytes)?;
+        let mut options = CompileOptions::new()?;
+        options.add_macro_definition("VERTEX_SHADER_MODULE", None);
+        let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test_solid::vert", "main", ShaderKind::Vertex, Some(&options))?;
 
-            let shader_create_info = ShaderModuleCreateInfo::new(&shader_code);
-            let shader_module = unsafe { ShaderModule::new(device.clone(), shader_create_info) }?;
-            shader_module.entry_point("main").unwrap()
-        };
+        let mut options = CompileOptions::new()?;
+        options.add_macro_definition("FRAGMENT_SHADER_MODULE", None);
+        let fs_solid = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test_solid::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
+        
+        options.add_macro_definition("WIREFRAME_ENABLED", None);
+        let fs_wire = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test_solid::frag(wire)", "main", ShaderKind::Fragment, Some(&options))?;
 
-        let stages = smallvec![
-            PipelineShaderStageCreateInfo::new(vs.clone()),
-            PipelineShaderStageCreateInfo::new(fs.clone()),
-        ];
+        // let vs = engine.graphics.load_shader_module_from_file("res/shaders/test_vert.glsl", "main", ShaderKind::Vertex, None)?;
+        // let fs = engine.graphics.load_shader_module_from_file("res/shaders/test_frag.glsl", "main", ShaderKind::Fragment, None)?;
 
-        let create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(device.clone())?;
-
-        let vertex_input_state = BaseVertex::per_vertex().definition(&vs)?;
-
-        let input_assembly_state = InputAssemblyState{
-            topology: PrimitiveTopology::TriangleList,
-            ..Default::default()
-        };
-
-        let tessellation_state = TessellationState{
-            ..Default::default()
-        };
-
-        let viewport_state = ViewportState{
-            ..Default::default()
-        };
-
-        let rasterization_state = RasterizationState{
-            polygon_mode: PolygonMode::Fill,
-            cull_mode: CullMode::None,
-            front_face: FrontFace::CounterClockwise,
-            ..Default::default()
-        };
-
-        let multisample_state = MultisampleState{
-            ..Default::default()
-        };
-
-        let color_blend_state = ColorBlendState{
-            attachments: vec![ColorBlendAttachmentState::default()],
-            ..Default::default()
-        };
-
-        let dynamic_state = HashSet::from_iter([
-            DynamicState::Viewport
-        ]);
-
-        let subpass = Subpass::from(render_pass.clone(), 0)
+        let subpass_type = Subpass::from(render_pass.clone(), 0)
             .ok_or_else(|| anyhow!("Failed to get subpass info for provided RenderPass"))?
             .into();
 
-        let pipeline_layout = PipelineLayout::new(device.clone(), create_info)?;
+        let entry_points = HashMap::from_iter([(0, "main"), (1, "main") ]);
 
-        let create_info = GraphicsPipelineCreateInfo{
-            stages,
-            vertex_input_state: Some(vertex_input_state),
-            input_assembly_state: Some(input_assembly_state),
-            // tessellation_state: Some(tessellation_state),
-            viewport_state: Some(viewport_state),
-            rasterization_state: Some(rasterization_state),
-            multisample_state: Some(multisample_state),
-            depth_stencil_state: None,
-            color_blend_state: Some(color_blend_state),
-            dynamic_state,
-            subpass: Some(subpass),
-            ..GraphicsPipelineCreateInfo::layout(pipeline_layout)
+        let pipeline_config = GraphicsPipelineConfiguration{
+            flags: PipelineCreateFlags::ALLOW_DERIVATIVES,
+            dynamic_states: vec![ DynamicState::Viewport ],
+            rasterization_state: RasterizationState{
+                polygon_mode: PolygonMode::Fill,
+                cull_mode: CullMode::Back,
+                front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            },
+            ..GraphicsPipelineConfiguration::new(subpass_type, vec![vs.clone(), fs_solid], entry_points, 0)
         };
 
-        let pipeline = GraphicsPipeline::new(device, None, create_info)?;
+        
+        let main_graphics_pipeline = GraphicsPipeline::new::<BaseVertex>(device.clone(), pipeline_config.clone())?;
+        
+        let wire_graphics_pipeline = GraphicsPipeline::new::<BaseVertex>(device.clone(), GraphicsPipelineConfiguration{
+            shader_modules: vec![vs.clone(), fs_wire],
+            rasterization_state: RasterizationState{
+                polygon_mode: PolygonMode::Line,
+                cull_mode: CullMode::Back,
+                front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            },
+            ..pipeline_config.clone()
+        })?;
 
-        self.graphics_pipeline = Some(pipeline);
+        self.solid_graphics_pipeline = Some(main_graphics_pipeline);
+        self.wire_graphics_pipeline = Some(wire_graphics_pipeline);
 
         Ok(())
     }
 }
 
-fn compile_to_spirv(src: &str, kind: ShaderKind, entry_point_name: &str) -> CompilationArtifact {
-    let mut f = File::open(src).unwrap_or_else(|_| panic!("Could not open file {}", src));
-    let mut glsl = String::new();
-    f.read_to_string(&mut glsl)
-        .unwrap_or_else(|_| panic!("Could not read file {} to string", src));
-
-    let compiler = shaderc::Compiler::new().unwrap();
-    let mut options = shaderc::CompileOptions::new().unwrap();
-    options.add_macro_definition("EP", Some(entry_point_name));
-    compiler
-        .compile_into_spirv(&glsl, kind, src, entry_point_name, Some(&options))
-        .expect("Could not compile glsl shader to spriv")
-}
 
 impl App for TestGame {
     fn register_events(&mut self, engine: &mut Engine) -> Result<()> {
@@ -180,40 +137,37 @@ impl App for TestGame {
         let window = &mut engine.window;
         ticker.set_desired_tick_rate(60.0);
         window.set_visible(true);
-        
+
 
         let vertices = [
-            BaseVertex {
-                position: [-0.5, 0.5],
-            },
-            BaseVertex {
-                position: [0.5, 0.5],
-            },
-            BaseVertex {
-                position: [0.0, -0.5],
-            },
+            BaseVertex { position: [-0.5, 0.5], colour: [0.0, 1.0, 0.0] },
+            BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 0.0] },
+            BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 0.0] },
+            BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 0.0] },
+        ];
+
+        let indices = [
+            0, 1, 2,
+            1, 3, 2
         ];
 
         let allocator = engine.graphics.get_memory_allocator();
-        let buffer_create_info = BufferCreateInfo{
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
+
+        let mesh_config = MeshConfiguration{
+            vertices: Vec::from(vertices),
+            indices: Some(Vec::from(indices)),
         };
 
-        let allocation_info = AllocationCreateInfo{
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        };
+        let mesh = Mesh::new(allocator.clone(), mesh_config)?;
 
-        let vertex_buffer = Buffer::from_iter(allocator, buffer_create_info, allocation_info, vertices)?;
-        self.vertex_buffer = Some(vertex_buffer);
+        self.mesh = Some(mesh);
 
         Ok(())
     }
 
     fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
-            self.on_recreate_swapchain(engine);
+            self.on_recreate_swapchain(engine)?;
         }
 
         if ticker.time_since_last_dbg() >= 1.0 {
@@ -230,7 +184,18 @@ impl App for TestGame {
             debug!("FIRST FRAME!")
         }
 
+
         let window = &mut engine.window;
+
+        if window.input().key_pressed(Key::F1) {
+            self.wire_state = match self.wire_state {
+                TestWireframeState::Solid => TestWireframeState::Wire,
+                TestWireframeState::Wire => TestWireframeState::Both,
+                TestWireframeState::Both => TestWireframeState::Solid
+            };
+
+            debug!("Changed render mode: {:?}", self.wire_state);
+        }
 
         if window.input().key_pressed(Key::Escape) {
             window.set_mouse_grabbed(!window.is_mouse_grabbed())
@@ -247,21 +212,19 @@ impl App for TestGame {
             depth_range: 0.0..=1.0,
         };
 
-        let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap().clone();
-        let vertex_buffer = self.vertex_buffer.as_ref().unwrap().clone();
         cmd_buf.set_viewport(0, [viewport].into_iter().collect())?;
-        cmd_buf.bind_pipeline_graphics(graphics_pipeline)?;
-        cmd_buf.bind_vertex_buffers(0, vertex_buffer.clone())?;
-        unsafe { cmd_buf.draw(vertex_buffer.len() as u32, 1, 0, 0) }?;
 
-        // if window.input().mouse_dragged(MouseBtn::Left) {
-        //     debug!("Mouse dragged {}", window.input().get_mouse_drag_pixel_distance(MouseBtn::Left));
-        // } else {
-        //     let vec = window.input().get_mouse_pixel_motion();
-        //     if vec.x != 0.0 && vec.y != 0.0 {
-        //         debug!("Mouse motion: {vec}");
-        //     }
-        // }
+
+        if self.wire_state == TestWireframeState::Solid || self.wire_state == TestWireframeState::Both {
+            let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
+            cmd_buf.bind_pipeline_graphics(solid_graphics_pipeline.get())?;
+            self.mesh.as_ref().unwrap().draw(cmd_buf, 1, 0)?;
+        }
+        if self.wire_state == TestWireframeState::Wire || self.wire_state == TestWireframeState::Both {
+            let wire_graphics_pipeline = self.wire_graphics_pipeline.as_ref().unwrap();
+            cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.get())?;
+            self.mesh.as_ref().unwrap().draw(cmd_buf, 1, 0)?;
+        }
 
         Ok(())
     }

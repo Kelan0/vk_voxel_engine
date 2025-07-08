@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use crate::application::window::SdlWindow;
 use crate::{log_error_and_anyhow, log_error_and_throw};
 use anyhow::{anyhow, Result};
@@ -7,9 +6,12 @@ use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::Read;
 use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
+use shaderc::{CompilationArtifact, CompileOptions, Compiler, ShaderKind};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
@@ -24,9 +26,9 @@ use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentRe
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
-use vulkano::memory::allocator::{GenericMemoryAllocatorCreateInfo, StandardMemoryAllocator};
-use vulkano::pipeline::graphics::viewport::Viewport;
-use crate::core::event::{Event, EventBus};
+use vulkano::memory::allocator::{StandardMemoryAllocator};
+use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
+use crate::core::event::{EventBus};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -49,6 +51,7 @@ pub struct GraphicsManager {
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     debug_messenger: Option<DebugUtilsMessenger>,
+    shader_compiler: Arc<Compiler>,
     preferred_present_mode: PresentMode,
     present_mode: PresentMode,
     color_format: Format,
@@ -286,6 +289,9 @@ impl GraphicsManager {
         let command_buffer_allocator = Self::create_command_buffer_allocator(&device)
             .inspect_err(|_| error!("Error creating command buffer allocator"))?;
 
+        info!("Creating shader compiler");
+        let shader_compiler = Arc::new(Compiler::new()?);
+
         let direct_image_present_enabled = false;
         let swapchain_image_sampled = false;
         let (width, height) = sdl_window.size_in_pixels();
@@ -306,6 +312,7 @@ impl GraphicsManager {
             memory_allocator,
             command_buffer_allocator,
             debug_messenger,
+            shader_compiler,
             preferred_present_mode: PresentMode::Immediate,
             present_mode: PresentMode::Immediate,
             color_format: Format::UNDEFINED,
@@ -640,15 +647,17 @@ impl GraphicsManager {
     // }
 
     fn create_memory_allocator(device: &Arc<Device>) -> Result<Arc<StandardMemoryAllocator>> {
-        let create_info = GenericMemoryAllocatorCreateInfo{
-            ..Default::default()
-        };
+        info!("Creating memory allocator for Vulkan");
+        // let create_info = GenericMemoryAllocatorCreateInfo{
+        //     ..Default::default()
+        // };
         
         let allocator = StandardMemoryAllocator::new_default(device.clone());
         Ok(Arc::new(allocator))
     }
     
     fn create_command_buffer_allocator(device: &Arc<Device>) -> Result<Arc<StandardCommandBufferAllocator>> {
+        info!("Creating command buffer allocator for Vulkan");
         let create_info = StandardCommandBufferAllocatorCreateInfo{
             primary_buffer_count: 32,
             secondary_buffer_count: 8,
@@ -1120,6 +1129,36 @@ impl GraphicsManager {
     
     pub fn get_memory_allocator(&self) -> Arc<StandardMemoryAllocator> {
         self.memory_allocator.clone()
+    }
+    
+    pub fn get_shader_compiler(&self) -> Arc<Compiler> {
+        self.shader_compiler.clone()
+    }
+    
+    pub fn compile_spirv_from_source(&self, source: &str, file_identifier: &str, entry_point_name: &str, kind: ShaderKind, options: Option<&CompileOptions>) -> Result<CompilationArtifact> {
+        let artifact = self.shader_compiler
+            .compile_into_spirv(&source, kind, file_identifier, entry_point_name, options)?;
+        
+        Ok(artifact)
+    }
+
+    pub fn load_shader_module_from_source(&self, source: &str, file_identifier: &str, entry_point_name: &str, kind: ShaderKind, options: Option<&CompileOptions>) -> Result<Arc<ShaderModule>> {
+        let compiled_code = self.compile_spirv_from_source(source, file_identifier, entry_point_name, kind, options)?;
+        let shader_code = vulkano::shader::spirv::bytes_to_words(compiled_code.as_binary_u8())?;
+
+        let device = self.device.clone();
+        let shader_create_info = ShaderModuleCreateInfo::new(&shader_code);
+        let shader_module = unsafe { ShaderModule::new(device.clone(), shader_create_info) }?;
+        Ok(shader_module)
+    }
+
+    pub fn load_shader_module_from_file(&self, path: &str, entry_point_name: &str, kind: ShaderKind, options: Option<&CompileOptions>) -> Result<Arc<ShaderModule>> {
+        let mut file = File::open(path)?;
+
+        let mut source = String::new();
+        file.read_to_string(&mut source)?;
+
+        self.load_shader_module_from_source(source.as_str(), path, entry_point_name, kind, options)
     }
     
     pub fn get_render_pass(&self) -> Arc<RenderPass> {

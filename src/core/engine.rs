@@ -1,10 +1,9 @@
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
-use crate::core::{GraphicsManager, RecreateSwapchainEvent};
+use crate::core::GraphicsManager;
 use anyhow::Result;
-use log::{debug, error, info};
-use shrev::ReaderId;
-use vulkano::command_buffer::{PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use log::{error, info};
+use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
 use vulkano::format::ClearValue;
 
 pub struct Engine {
@@ -105,7 +104,7 @@ impl Engine {
     }
 
     fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
-        let clear_values = vec![Some(ClearValue::Float([1.0, 1.0, 0.0, 1.0]))];
+        let clear_values = vec![Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0]))];
 
         let framebuffer = self.graphics.get_current_framebuffer();
 

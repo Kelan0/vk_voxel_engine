@@ -1,10 +1,9 @@
+use anyhow::Result;
+use log::{debug, error, warn};
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
-use anyhow::{Result};
-use log::{debug, error, warn};
 use std::thread;
 use std::time::{Duration, Instant};
-use vulkano::device::Queue;
 
 const MIN_SLEEP_DURATION: f64 = 0.001; // 1ms - Sleep if there is at least this amount of time remaining for the current tick.
 const DBG_LOG_MISSED_TIME: f64 = 5.0; // 5sec - Log the lost time after accumulating this much difference between simulation time and actual time
