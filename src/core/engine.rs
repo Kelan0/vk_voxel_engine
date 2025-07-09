@@ -1,16 +1,20 @@
+use std::backtrace::Backtrace;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
 use crate::core::GraphicsManager;
 use anyhow::Result;
 use log::{error, info};
+use shrev::ReaderId;
 use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
 use vulkano::format::ClearValue;
+use crate::application::window::WindowResizedEvent;
 
 pub struct Engine {
     // pub rt: Runtime,
     pub window: Window,
     pub graphics: GraphicsManager,
     user_app: Option<Box<dyn App>>,
+    event_window_resized: Option<ReaderId<WindowResizedEvent>>
 }
 
 pub struct RenderContext<'a> {
@@ -42,6 +46,7 @@ impl Engine {
             window,
             graphics,
             user_app,
+            event_window_resized: None
         };
 
         Ok(app)
@@ -71,12 +76,15 @@ impl Engine {
     where T: App + 'static {
         if let Err(e) = Self::start_internal(user_app) {
             error!("An error occurred during engine execution");
+            let backtrace = e.backtrace();
             error!("Root cause: {}", e.root_cause());
 
             let chain = e.chain();
             for e in chain {
                 error!("{e}");
             }
+            
+            error!("Backtrace:\n{}", backtrace);
 
             // let mut src = e.source();
             // while let Some(e) = src {
@@ -90,6 +98,10 @@ impl Engine {
         self.user_app.as_ref().unwrap().as_ref()
     }
 
+    fn register_events(&mut self) {
+        self.event_window_resized = Some(self.window.event_bus().register::<WindowResizedEvent>());
+    }
+    
     fn pre_render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
 
         if ticker.time_since_last_dbg() >= 1.0 {
@@ -129,15 +141,21 @@ impl Engine {
 
 impl Tickable for Engine {
     fn init(&mut self, ticker: &mut Ticker) -> Result<()> {
-
-        self.graphics.init()?;
+        
+        self.register_events();
 
         {
             let mut user_app = std::mem::take(&mut self.user_app);
             let result = user_app.as_mut().unwrap().register_events(self);
             self.user_app = user_app;
             result?;
+        }
 
+
+
+        self.graphics.init()?;
+        
+        {
             let mut user_app = std::mem::take(&mut self.user_app);
             let result = user_app.as_mut().unwrap().init(ticker, self);
             self.user_app = user_app;
@@ -153,9 +171,9 @@ impl Tickable for Engine {
         if self.window.did_quit() {
             ticker.stop();
         }
-        if self.window.did_resize() {
-            let size = self.window.get_window_size_in_pixels();
-            self.graphics.set_resolution(size.x as u32, size.y as u32)?;
+        
+        if let Some(event) = self.window.event_bus().read_one_opt(&mut self.event_window_resized) {
+            self.graphics.set_resolution(event.width, event.height)?;
         }
 
         match self.graphics.begin_frame() {

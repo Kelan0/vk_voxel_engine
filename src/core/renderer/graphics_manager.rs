@@ -26,6 +26,7 @@ use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentRe
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
+use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::memory::allocator::{StandardMemoryAllocator};
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use crate::core::event::{EventBus};
@@ -50,6 +51,7 @@ pub struct GraphicsManager {
     // command_pools: HashMap<u32, CommandPool>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     debug_messenger: Option<DebugUtilsMessenger>,
     shader_compiler: Arc<Compiler>,
     preferred_present_mode: PresentMode,
@@ -288,6 +290,9 @@ impl GraphicsManager {
         
         let command_buffer_allocator = Self::create_command_buffer_allocator(&device)
             .inspect_err(|_| error!("Error creating command buffer allocator"))?;
+        
+        let descriptor_set_allocator = Self::create_descriptor_set_allocator(&device)
+            .inspect_err(|_| error!("Error creating command buffer allocator"))?;
 
         info!("Creating shader compiler");
         let shader_compiler = Arc::new(Compiler::new()?);
@@ -311,6 +316,7 @@ impl GraphicsManager {
             // command_pools,
             memory_allocator,
             command_buffer_allocator,
+            descriptor_set_allocator,
             debug_messenger,
             shader_compiler,
             preferred_present_mode: PresentMode::Immediate,
@@ -665,6 +671,20 @@ impl GraphicsManager {
         };
 
         let allocator = StandardCommandBufferAllocator::new(device.clone(), create_info);
+        Ok(Arc::new(allocator))
+
+        // CommandBufferAllocator::new(device.clone(), 32, 0)
+    }
+    
+    fn create_descriptor_set_allocator(device: &Arc<Device>) -> Result<Arc<StandardDescriptorSetAllocator>> {
+        info!("Creating descriptor set allocator for Vulkan");
+        let create_info = StandardDescriptorSetAllocatorCreateInfo{
+            set_count: 32,
+            update_after_bind: false,
+            ..Default::default()
+        };
+
+        let allocator = StandardDescriptorSetAllocator::new(device.clone(), create_info);
         Ok(Arc::new(allocator))
 
         // CommandBufferAllocator::new(device.clone(), 32, 0)
@@ -1129,6 +1149,14 @@ impl GraphicsManager {
     
     pub fn get_memory_allocator(&self) -> Arc<StandardMemoryAllocator> {
         self.memory_allocator.clone()
+    }
+    
+    pub fn get_command_buffer_allocator(&self) -> Arc<StandardCommandBufferAllocator> {
+        self.command_buffer_allocator.clone()
+    }
+    
+    pub fn get_descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
+        self.descriptor_set_allocator.clone()
     }
     
     pub fn get_shader_compiler(&self) -> Arc<Compiler> {

@@ -4,6 +4,7 @@ mod renderer;
 mod graphics_pipeline;
 mod mesh;
 mod shader;
+mod camera;
 
 pub use graphics_manager::GraphicsManager;
 
@@ -11,3 +12,4 @@ pub use graphics_manager::GraphicsManager;
 pub(crate) use graphics_pipeline::*;
 pub(crate) use graphics_manager::*;
 pub(crate) use mesh::*;
+pub(crate) use camera::*;

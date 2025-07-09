@@ -1,8 +1,9 @@
 use glam::Vec2;
 use log::warn;
 use sdl3::event::Event;
+use sdl3::EventPump;
 use sdl3::keyboard::Scancode;
-use sdl3::mouse::MouseWheelDirection;
+use sdl3::mouse::{MouseWheelDirection, RelativeMouseState};
 
 const USE_SCANCODES: bool = true;
 const KEYBOARD_SIZE: usize = Scancode::Count as usize;
@@ -27,6 +28,7 @@ pub struct InputHandler {
     prev_mouse_pixel_motion: Vec2,
     scroll_amount: Vec2,
     window_size: Vec2,
+    relative_mouse_state: RelativeMouseState,
 }
 
 impl InputHandler {
@@ -47,10 +49,11 @@ impl InputHandler {
             prev_mouse_pixel_motion: Vec2::ZERO,
             scroll_amount: Vec2::ZERO,
             window_size: Vec2::ONE,
+            relative_mouse_state: RelativeMouseState::from_sdl_state(0),
         }
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, event_pump: &EventPump) {
         for i in 0..KEYBOARD_SIZE {
             self.keys_pressed[i] = false;
             self.keys_released[i] = false;
@@ -66,6 +69,7 @@ impl InputHandler {
         self.curr_mouse_pixel_motion = Vec2::ZERO;
 
         self.scroll_amount = Vec2::ZERO;
+        self.relative_mouse_state = event_pump.relative_mouse_state();
     }
 
     pub fn process_event(&mut self, event: &Event) {
@@ -219,5 +223,16 @@ impl InputHandler {
 
     pub fn get_mouse_scroll_amount(&self) -> Vec2 {
         self.scroll_amount
+    }
+    
+    pub fn relative_mouse_x(&self) -> f32 {
+        self.relative_mouse_state.x()
+    }
+    pub fn relative_mouse_y(&self) -> f32 {
+        self.relative_mouse_state.y()
+    }
+    
+    pub fn relative_mouse_pos(&self) -> Vec2 {
+        Vec2::new(self.relative_mouse_x(), self.relative_mouse_y())
     }
 }

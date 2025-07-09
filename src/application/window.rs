@@ -11,24 +11,32 @@ use sdl3::pixels::Color;
 use sdl3::render::WindowCanvas;
 use sdl3::{IntegerOrSdlError, Sdl, VideoSubsystem};
 use std::ffi::NulError;
+use crate::core::EventBus;
 
 pub type SdlWindow = sdl3::video::Window;
 
 pub struct Window {
+    event_bus: EventBus,
     sdl_ctx: Sdl,
     _sdl_video: VideoSubsystem,
     sdl_canvas: WindowCanvas,
     input_handler: InputHandler,
     did_quit: bool,
-    mouse_grabbed: bool,
     did_warp_mouse: bool,
-    did_resize: bool,
+    mouse_grabbed: bool,
     is_visible: bool,
+}
+
+pub struct WindowResizedEvent {
+    pub width: u32,
+    pub height: u32
 }
 
 impl Window {
     pub fn new(title: &str, width: u32, height: u32) -> Result<Self> {
         info!("Initializing window");
+        
+        let event_bus = EventBus::new();
 
         info!("Initializing SDL");
         let sdl_ctx = sdl3::init()
@@ -50,14 +58,14 @@ impl Window {
         let input_handler = InputHandler::new();
 
         let mut window = Window{
+            event_bus,
             sdl_ctx,
             _sdl_video: sdl_video,
             sdl_canvas,
             input_handler,
             did_quit: false,
-            mouse_grabbed: false,
             did_warp_mouse: false,
-            did_resize: false,
+            mouse_grabbed: false,
             is_visible: false,
         };
 
@@ -73,11 +81,9 @@ impl Window {
         // self.sdl_canvas.present();
 
         let mut event_pump = self.sdl_ctx.event_pump().unwrap();
-
-        self.did_resize = false;
         
         // self.sdl_canvas.clear();
-        self.input_handler.update();
+        self.input_handler.update(&event_pump);
 
         let is_window_focused = true; // Application::instance()->isWindowFocused()
         if self.mouse_grabbed && is_window_focused {
@@ -98,9 +104,12 @@ impl Window {
                         WindowEvent::Hidden => {
                             self.is_visible = false;
                         }
-                        WindowEvent::Resized(_width, _height) => {
+                        WindowEvent::Resized(width, height) => {
                             self.input_handler.update_window_size(self.get_window_size());
-                            self.did_resize = true;
+                            self.event_bus.emit(WindowResizedEvent{
+                                width: width as u32, 
+                                height: height as u32 
+                            });
                         }
                         WindowEvent::PixelSizeChanged(_, _) => {}
                         WindowEvent::Minimized => {}
@@ -122,6 +131,10 @@ impl Window {
         // self.sdl_canvas.present();
     }
 
+    pub fn event_bus(&mut self) -> &mut EventBus {
+        &mut self.event_bus
+    }
+    
     pub fn sdl_window_handle(&self) -> &SdlWindow {
         self.sdl_canvas.window()
     }
@@ -134,10 +147,6 @@ impl Window {
         self.did_quit
     }
 
-    pub fn did_resize(&self) -> bool {
-        self.did_resize
-    }
-    
     pub fn is_visible(&self) -> bool {
         self.is_visible
     }
@@ -202,6 +211,11 @@ impl Window {
     pub fn get_window_size(&self) -> Vec2 {
         let (width, height) = self.window().size();
         Vec2::new(width as f32, height as f32)
+    }
+    
+    pub fn get_aspect_ratio(&self) -> f32 {
+        let size = self.get_window_size();
+        return size.x / size.y;
     }
     
     pub fn get_window_size_in_pixels(&self) -> Vec2 {
