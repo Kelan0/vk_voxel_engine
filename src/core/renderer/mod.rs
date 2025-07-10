@@ -1,5 +1,4 @@
 mod graphics_manager;
-mod renderer;
 mod graphics_pipeline;
 mod mesh;
 mod shader;

@@ -90,7 +90,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;
         }
@@ -113,8 +113,8 @@ impl SceneRenderer {
         let uniform_buffer_camera = resource.uniform_buffer_camera.as_ref().unwrap();
 
         match uniform_buffer_camera.write() {
-            Ok(mut write) => self.camera.update_camera_buffer(&mut *write),
-            Err(err) => error!("Unable to write camera data: {}", err)
+            Ok(mut write) => self.camera.update_camera_buffer(&mut write),
+            Err(err) => error!("Unable to write camera data: {err}")
         }
         
         
@@ -262,11 +262,11 @@ impl SceneRenderer {
         Ok(())
     }
 
-    fn curr_resource<'a>(resources: &'a mut Vec<FrameResource>, engine: &Engine) -> &'a mut FrameResource {
+    fn curr_resource<'a>(resources: &'a mut [FrameResource], engine: &Engine) -> &'a mut FrameResource {
         Self::resource(resources, engine.graphics.get_current_frame_index())
     }
 
-    fn resource(resources: &mut Vec<FrameResource>, index: usize) -> &mut FrameResource {
+    fn resource(resources: &mut [FrameResource], index: usize) -> &mut FrameResource {
         // self.resources[index].as_mut().unwrap()
         &mut resources[index]
     }

@@ -19,9 +19,7 @@ impl EventBus {
     pub fn channel<E: Event>(&mut self) -> &mut EventChannel<E> {
         let type_id = TypeId::of::<E>();
         
-        if !self.event_channels.contains_key(&type_id) {
-            self.event_channels.insert(type_id, Box::new(EventChannel::<E>::new()));
-        }
+        self.event_channels.entry(type_id).or_insert_with(|| Box::new(EventChannel::<E>::new()));
         
         self.event_channels
             .get_mut(&type_id)
@@ -45,10 +43,8 @@ impl EventBus {
     }
 
     pub fn read_opt<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> EventIterator<E> {
-        if cfg!(debug_assertions) {
-            if reader_id.is_none() {
-                error!("Tried to read EventBus for Option reader_id, but reader_id is None");
-            }
+        if cfg!(debug_assertions) && reader_id.is_none() {
+            error!("Tried to read EventBus for Option reader_id, but reader_id is None");
         }
         let r = reader_id.as_mut().unwrap();
         self.read(r)

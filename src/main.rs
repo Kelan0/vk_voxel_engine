@@ -3,35 +3,18 @@ mod core;
 mod util;
 
 use crate::application::Key;
-use crate::core::{BaseVertex, Camera, CameraBufferUBO, GraphicsManager, GraphicsPipelineBuilder, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent, WireframeMode};
-use anyhow::{anyhow, Result};
-use application::ticker::Ticker;
-use application::App;
-use core::Engine;
-use foldhash::{HashMap};
-use log::{debug, error, info};
-use shaderc::{CompileOptions, ShaderKind};
-use shrev::ReaderId;
-use std::fs::File;
-use std::io::Read;
-use std::sync::Arc;
-use glam::{Mat4, Quat, Vec3, Vec4};
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, BufferWriteGuard, Subbuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
-use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
-use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
-use vulkano::pipeline::graphics::multisample::MultisampleState;
-use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, LineRasterizationMode, PolygonMode, RasterizationState};
-use vulkano::pipeline::graphics::vertex_input::Vertex;
-use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::render_pass::Subpass;
-use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
-use vulkano::sync::HostAccessError;
 use crate::application::window::WindowResizedEvent;
-
-
+use crate::core::{
+    BaseVertex, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent,
+    WireframeMode,
+};
+use anyhow::Result;
+use application::App;
+use application::ticker::Ticker;
+use core::Engine;
+use glam::Vec3;
+use log::{debug, info};
+use shrev::ReaderId;
 
 struct TestGame {
     camera_pitch: f32,
@@ -39,7 +22,6 @@ struct TestGame {
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
 }
-
 
 impl TestGame {
     fn new() -> Self {
@@ -51,16 +33,21 @@ impl TestGame {
         }
     }
 
-    fn on_recreate_swapchain(&mut self, engine: &Engine) -> Result<()> {
+    fn on_recreate_swapchain(&mut self, _engine: &Engine) -> Result<()> {
         Ok(())
     }
 }
 
-
 impl App for TestGame {
     fn register_events(&mut self, engine: &mut Engine) -> Result<()> {
-        self.event_recreate_swapchain = Some(engine.graphics.event_bus().register::<RecreateSwapchainEvent>());
-        self.event_window_resized = Some(engine.window.event_bus().register::<WindowResizedEvent>());
+        self.event_recreate_swapchain = Some(
+            engine
+                .graphics
+                .event_bus()
+                .register::<RecreateSwapchainEvent>(),
+        );
+        self.event_window_resized =
+            Some(engine.window.event_bus().register::<WindowResizedEvent>());
         Ok(())
     }
 
@@ -70,30 +57,38 @@ impl App for TestGame {
         ticker.set_desired_tick_rate(175.0);
         window.set_visible(true);
 
-
         let vertices = [
-            BaseVertex { position: [-0.5, 1.5], colour: [0.0, 1.0, 0.0] },
-            BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 0.0] },
-            BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 0.0] },
-            BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 0.0] },
+            BaseVertex {
+                position: [-0.5, 1.5],
+                colour: [0.0, 1.0, 0.0],
+            },
+            BaseVertex {
+                position: [0.5, 0.5],
+                colour: [1.0, 1.0, 0.0],
+            },
+            BaseVertex {
+                position: [-0.5, -0.5],
+                colour: [0.0, 0.0, 0.0],
+            },
+            BaseVertex {
+                position: [0.5, -0.5],
+                colour: [1.0, 0.0, 0.0],
+            },
         ];
 
-        let indices = [
-            0, 1, 2,
-            1, 3, 2
-        ];
+        let indices = [0, 1, 2, 1, 3, 2];
 
         let allocator = engine.graphics.get_memory_allocator();
 
-        let mesh_config = MeshConfiguration{
+        let mesh_config = MeshConfiguration {
             vertices: Vec::from(vertices),
             indices: Some(Vec::from(indices)),
         };
 
         let mesh = Mesh::new(allocator.clone(), mesh_config)?;
-        
+
         engine.scene_renderer.add_mesh(mesh);
-        
+
         let camera = engine.scene_renderer.camera_mut();
         camera.set_perspective(70.0, 4.0 / 3.0, 0.01, 100.0);
         camera.set_position(Vec3::new(1.0, 0.0, -3.0));
@@ -101,12 +96,25 @@ impl App for TestGame {
         Ok(())
     }
 
-    fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
-        if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
+    fn pre_render(
+        &mut self,
+        ticker: &mut Ticker,
+        engine: &mut Engine,
+        _cmd_buf: &mut PrimaryCommandBuffer,
+    ) -> Result<()> {
+        if engine
+            .graphics
+            .event_bus()
+            .has_any_opt(&mut self.event_recreate_swapchain)
+        {
             self.on_recreate_swapchain(engine)?;
         }
 
-        if let Some(event) = engine.window.event_bus().read_one_opt(&mut self.event_window_resized) {
+        if let Some(event) = engine
+            .window
+            .event_bus()
+            .read_one_opt(&mut self.event_window_resized)
+        {
             let aspect_ratio = event.width as f32 / event.height as f32;
             let camera = engine.scene_renderer.camera_mut();
             camera.set_aspect_ratio(aspect_ratio);
@@ -120,22 +128,31 @@ impl App for TestGame {
         Ok(())
     }
 
-    fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
-
+    fn render(
+        &mut self,
+        ticker: &mut Ticker,
+        engine: &mut Engine,
+        _cmd_buf: &mut PrimaryCommandBuffer,
+    ) -> Result<()> {
         if engine.graphics.state().first_frame() {
             debug!("FIRST FRAME!")
         }
-        
-        let window = &mut engine.window;
-        
-        if window.input().key_pressed(Key::F1) {
-            engine.scene_renderer.set_wireframe_mode(match engine.scene_renderer.wireframe_mode() {
-                WireframeMode::Solid => WireframeMode::Wire,
-                WireframeMode::Wire => WireframeMode::Both,
-                WireframeMode::Both => WireframeMode::Solid
-            });
 
-            debug!("Changed render mode: {:?}", engine.scene_renderer.wireframe_mode());
+        let window = &mut engine.window;
+
+        if window.input().key_pressed(Key::F1) {
+            engine.scene_renderer.set_wireframe_mode(
+                match engine.scene_renderer.wireframe_mode() {
+                    WireframeMode::Solid => WireframeMode::Wire,
+                    WireframeMode::Wire => WireframeMode::Both,
+                    WireframeMode::Both => WireframeMode::Solid,
+                },
+            );
+
+            debug!(
+                "Changed render mode: {:?}",
+                engine.scene_renderer.wireframe_mode()
+            );
         }
 
         if window.input().key_pressed(Key::Escape) {
@@ -156,7 +173,7 @@ impl App for TestGame {
             }
 
             let camera = engine.scene_renderer.camera_mut();
-            
+
             let up_axis = Vec3::Y;
             let right_axis = camera.x_axis();
             let forward_axis = Vec3::cross(camera.x_axis(), up_axis);

@@ -1,5 +1,5 @@
-use glam::{EulerRot, Mat3, Mat4, Quat, Vec3, Vec4};
-use vulkano::buffer::{BufferContents, BufferWriteGuard};
+use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+use vulkano::buffer::BufferContents;
 
 #[derive(Clone, PartialEq)]
 pub struct Camera {
@@ -21,8 +21,8 @@ impl Camera {
         Default::default()
     }
 
-    pub fn new_perspective(fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> Self{
-        Camera{
+    pub fn new_perspective(fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> Self {
+        Camera {
             fov,
             aspect_ratio,
             near_plane,
@@ -34,9 +34,18 @@ impl Camera {
     pub fn update(&mut self) {
         if self.projection_changed {
             if self.is_infinite_far_plane() {
-                self.projection_matrix = Mat4::perspective_infinite_lh(self.fov.to_radians(), self.aspect_ratio, self.near_plane);
+                self.projection_matrix = Mat4::perspective_infinite_lh(
+                    self.fov.to_radians(),
+                    self.aspect_ratio,
+                    self.near_plane,
+                );
             } else {
-                self.projection_matrix = Mat4::perspective_lh(self.fov.to_radians(), self.aspect_ratio, self.near_plane, self.far_plane);
+                self.projection_matrix = Mat4::perspective_lh(
+                    self.fov.to_radians(),
+                    self.aspect_ratio,
+                    self.near_plane,
+                    self.far_plane,
+                );
             }
         }
 
@@ -62,11 +71,21 @@ impl Camera {
     }
 
     pub fn set_rotation_euler(&mut self, pitch: f32, yaw: f32, roll: f32) {
-        self.set_orientation(Quat::from_euler(EulerRot::XYZEx, pitch.to_radians(), yaw.to_radians(), roll.to_radians()));
+        self.set_orientation(Quat::from_euler(
+            EulerRot::XYZEx,
+            pitch.to_radians(),
+            yaw.to_radians(),
+            roll.to_radians(),
+        ));
     }
 
     pub fn add_rotation_euler(&mut self, pitch: f32, yaw: f32, roll: f32) {
-        self.add_rotation(Quat::from_euler(EulerRot::XYZEx, pitch.to_radians(), yaw.to_radians(), roll.to_radians()));
+        self.add_rotation(Quat::from_euler(
+            EulerRot::XYZEx,
+            pitch.to_radians(),
+            yaw.to_radians(),
+            roll.to_radians(),
+        ));
     }
 
     pub fn look_at(&mut self, center: Vec3, up: Vec3) {
@@ -79,17 +98,32 @@ impl Camera {
 
     pub fn set_pitch(&mut self, pitch: f32) {
         let (_, yaw, roll) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(EulerRot::XYZEx, pitch.to_radians(), yaw.to_radians(), roll.to_radians()));
+        self.set_orientation(Quat::from_euler(
+            EulerRot::XYZEx,
+            pitch.to_radians(),
+            yaw.to_radians(),
+            roll.to_radians(),
+        ));
     }
 
     pub fn set_yaw(&mut self, yaw: f32) {
         let (pitch, _, roll) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(EulerRot::XYZEx, pitch.to_radians(), yaw.to_radians(), roll.to_radians()));
+        self.set_orientation(Quat::from_euler(
+            EulerRot::XYZEx,
+            pitch.to_radians(),
+            yaw.to_radians(),
+            roll.to_radians(),
+        ));
     }
 
     pub fn set_roll(&mut self, roll: f32) {
         let (pitch, yaw, _) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(EulerRot::XYZEx, pitch.to_radians(), yaw.to_radians(), roll.to_radians()));
+        self.set_orientation(Quat::from_euler(
+            EulerRot::XYZEx,
+            pitch.to_radians(),
+            yaw.to_radians(),
+            roll.to_radians(),
+        ));
     }
 
     pub fn set_fov(&mut self, fov: f32) {
@@ -108,7 +142,13 @@ impl Camera {
         self.projection_changed = true;
     }
 
-    pub fn set_perspective(&mut self, fov: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) {
+    pub fn set_perspective(
+        &mut self,
+        fov: f32,
+        aspect_ratio: f32,
+        near_plane: f32,
+        far_plane: f32,
+    ) {
         self.set_fov(fov);
         self.set_aspect_ratio(aspect_ratio);
         self.set_near_far_plane(near_plane, far_plane);
@@ -184,7 +224,7 @@ impl Camera {
     pub fn roll(&self) -> f32 {
         let (_, _, roll) = self.orientation.to_euler(EulerRot::XYZEx);
         roll.to_degrees()
-        
+
         // let ( q_w, q_x, q_y, q_z ) = (self.orientation.w, self.orientation.x, self.orientation.y, self.orientation.z);
         // let yaw = f32::atan2(2.0 * (q_w * q_z + q_x * q_y), 1.0 - 2.0 * (q_y * q_y + q_z * q_z));
         // yaw.to_degrees()

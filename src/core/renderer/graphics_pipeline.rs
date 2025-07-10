@@ -1,23 +1,25 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use foldhash::HashMap;
 use foldhash::HashSet;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 use vulkano::device::Device;
-use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
-use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
-use vulkano::pipeline::graphics::multisample::MultisampleState;
-use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState};
-use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
-use vulkano::pipeline::graphics::tessellation::TessellationState;
-use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition, VertexInputState};
-use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
-use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use vulkano::pipeline::{DynamicState, PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::graphics::color_blend::ColorBlendState;
 use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::discard_rectangle::DiscardRectangleState;
 use vulkano::pipeline::graphics::fragment_shading_rate::FragmentShadingRateState;
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::graphics::rasterization::RasterizationState;
+use vulkano::pipeline::graphics::subpass::PipelineSubpassType;
+use vulkano::pipeline::graphics::tessellation::TessellationState;
+use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
+use vulkano::pipeline::graphics::viewport::ViewportState;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{
+    DynamicState, PipelineCreateFlags, PipelineLayout, PipelineShaderStageCreateInfo,
+};
 use vulkano::shader::ShaderModule;
 use vulkano::shader::spirv::ExecutionModel;
 
@@ -30,13 +32,15 @@ pub struct PipelineLayoutBuilder {
 }
 
 impl PipelineLayoutBuilder {
-    pub fn new(shader_modules: Vec<Arc<ShaderModule>>, entry_points: HashMap<u32, &'static str>) -> Self {
-        PipelineLayoutBuilder{
+    pub fn new(
+        shader_modules: Vec<Arc<ShaderModule>>,
+        entry_points: HashMap<u32, &'static str>,
+    ) -> Self {
+        PipelineLayoutBuilder {
             shader_modules,
-            entry_points
+            entry_points,
         }
     }
-    
 }
 
 #[derive(Clone)]
@@ -59,7 +63,11 @@ pub struct GraphicsPipelineBuilder {
 }
 
 impl GraphicsPipelineBuilder {
-    pub fn new(subpass_type: PipelineSubpassType, shader_modules: Vec<Arc<ShaderModule>>, entry_points: HashMap<u32, &'static str>) -> Self {
+    pub fn new(
+        subpass_type: PipelineSubpassType,
+        shader_modules: Vec<Arc<ShaderModule>>,
+        entry_points: HashMap<u32, &'static str>,
+    ) -> Self {
         GraphicsPipelineBuilder {
             flags: PipelineCreateFlags::empty(),
             subpass_type: Some(subpass_type),
@@ -79,7 +87,11 @@ impl GraphicsPipelineBuilder {
         }
     }
 
-    pub fn new_derive(graphics_pipeline: Arc<VkGraphicsPipeline>, shader_modules: Vec<Arc<ShaderModule>>, entry_points: HashMap<u32, &'static str>) -> Self {
+    pub fn new_derive(
+        graphics_pipeline: Arc<VkGraphicsPipeline>,
+        shader_modules: Vec<Arc<ShaderModule>>,
+        entry_points: HashMap<u32, &'static str>,
+    ) -> Self {
         GraphicsPipelineBuilder {
             flags: graphics_pipeline.flags() | PipelineCreateFlags::DERIVATIVE,
             subpass_type: Some(graphics_pipeline.subpass().clone()),
@@ -98,8 +110,11 @@ impl GraphicsPipelineBuilder {
             fragment_shading_rate_state: graphics_pipeline.fragment_shading_rate_state().cloned(),
         }
     }
-    
-    pub fn new_layout(shader_modules: Vec<Arc<ShaderModule>>, entry_points: HashMap<u32, &'static str>) -> Self {
+
+    pub fn new_layout(
+        shader_modules: Vec<Arc<ShaderModule>>,
+        entry_points: HashMap<u32, &'static str>,
+    ) -> Self {
         GraphicsPipelineBuilder {
             flags: PipelineCreateFlags::empty(),
             subpass_type: None,
@@ -118,107 +133,127 @@ impl GraphicsPipelineBuilder {
             fragment_shading_rate_state: None,
         }
     }
-    
+
     pub fn set_flags(&mut self, flags: PipelineCreateFlags) -> &mut Self {
         self.flags = flags;
         self
     }
-    
+
     pub fn add_flags(&mut self, flags: PipelineCreateFlags) -> &mut Self {
         self.flags |= flags;
         self
     }
-    
-    pub fn set_input_assembly_state(&mut self, input_assembly_state: InputAssemblyState) -> &mut Self {
+
+    pub fn set_input_assembly_state(
+        &mut self,
+        input_assembly_state: InputAssemblyState,
+    ) -> &mut Self {
         self.input_assembly_state = Some(input_assembly_state);
         self
     }
-    
+
     pub fn set_tessellation_state(&mut self, tessellation_state: TessellationState) -> &mut Self {
         self.tessellation_state = Some(tessellation_state);
         self
     }
-    
+
     pub fn set_viewport_state(&mut self, viewport_state: ViewportState) -> &mut Self {
         self.viewport_state = Some(viewport_state);
         self
     }
-    
-    pub fn set_rasterization_state(&mut self, rasterization_state: RasterizationState) -> &mut Self {
+
+    pub fn set_rasterization_state(
+        &mut self,
+        rasterization_state: RasterizationState,
+    ) -> &mut Self {
         self.rasterization_state = Some(rasterization_state);
         self
     }
-    
+
     pub fn set_multisample_state(&mut self, multisample_state: MultisampleState) -> &mut Self {
         self.multisample_state = Some(multisample_state);
         self
     }
-    
+
     pub fn set_depth_stencil_state(&mut self, depth_stencil_state: DepthStencilState) -> &mut Self {
         self.depth_stencil_state = Some(depth_stencil_state);
         self
     }
-    
+
     pub fn set_color_blend_state(&mut self, color_blend_state: ColorBlendState) -> &mut Self {
         self.color_blend_state = Some(color_blend_state);
         self
     }
-    
+
     pub fn set_dynamic_states(&mut self, dynamic_states: Vec<DynamicState>) -> &mut Self {
         self.dynamic_states = dynamic_states;
         self
     }
-    
+
     pub fn set_base_pipeline(&mut self, base_pipeline: Arc<VkGraphicsPipeline>) -> &mut Self {
         self.base_pipeline = Some(base_pipeline);
         self
     }
-    
-    pub fn set_discard_rectangle_state(&mut self, discard_rectangle_state: DiscardRectangleState) -> &mut Self {
+
+    pub fn set_discard_rectangle_state(
+        &mut self,
+        discard_rectangle_state: DiscardRectangleState,
+    ) -> &mut Self {
         self.discard_rectangle_state = Some(discard_rectangle_state);
         self
     }
-    
-    pub fn set_fragment_shading_rate_state(&mut self, fragment_shading_rate_state: FragmentShadingRateState) -> &mut Self {
+
+    pub fn set_fragment_shading_rate_state(
+        &mut self,
+        fragment_shading_rate_state: FragmentShadingRateState,
+    ) -> &mut Self {
         self.fragment_shading_rate_state = Some(fragment_shading_rate_state);
         self
     }
-    
-    
+
     pub fn collect_stages(&self) -> Result<SmallVec<[PipelineShaderStageCreateInfo; 5]>> {
         let mut stages: SmallVec<[PipelineShaderStageCreateInfo; 5]> = smallvec![];
 
         for (module_index, entry_point_name) in self.entry_points.iter() {
             let module = &self.shader_modules[*module_index as usize];
-            let entry_point = module.entry_point(entry_point_name)
-                .ok_or_else(|| anyhow!("Unable to find entry point \"{}\" for shader module at index {}: {:?}", entry_point_name, module_index, module))?;
+            let entry_point = module.entry_point(entry_point_name).ok_or_else(|| {
+                anyhow!(
+                    "Unable to find entry point \"{}\" for shader module at index {}: {:?}",
+                    entry_point_name,
+                    module_index,
+                    module
+                )
+            })?;
 
             let stage = PipelineShaderStageCreateInfo::new(entry_point);
             stages.push(stage);
         }
         Ok(stages)
     }
-    
-    fn get_vertex_module_index(&self, stages: &SmallVec<[PipelineShaderStageCreateInfo; 5]>) -> Option<usize> {
+
+    fn get_vertex_module_index(
+        &self,
+        stages: &SmallVec<[PipelineShaderStageCreateInfo; 5]>,
+    ) -> Option<usize> {
         let mut vertex_module_index = None;
 
         for (idx, stage) in stages.iter().enumerate() {
-
             if stage.entry_point.info().execution_model == ExecutionModel::Vertex {
                 vertex_module_index = Some(idx);
             }
         }
-        
+
         vertex_module_index
     }
-    
-    
-    
-    pub fn build_pipeline<V: Vertex>(&self, device: Arc<Device>) -> Result<Arc<VkGraphicsPipeline>> {
 
+    pub fn build_pipeline<V: Vertex>(
+        &self,
+        device: Arc<Device>,
+    ) -> Result<Arc<VkGraphicsPipeline>> {
         let stages = self.collect_stages()?;
-        
-        let create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(device.clone())?;
+
+        let create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+            .into_pipeline_layout_create_info(device.clone())?;
         let pipeline_layout = PipelineLayout::new(device.clone(), create_info)?;
 
         let vertex_module_index = self.get_vertex_module_index(&stages);
@@ -241,7 +276,7 @@ impl GraphicsPipelineBuilder {
             flags |= PipelineCreateFlags::DERIVATIVE;
         }
 
-        let create_info = GraphicsPipelineCreateInfo{
+        let create_info = GraphicsPipelineCreateInfo {
             flags: self.flags,
             stages,
             vertex_input_state: Some(vertex_input_state),
@@ -264,106 +299,3 @@ impl GraphicsPipelineBuilder {
         Ok(pipeline)
     }
 }
-
-
-
-// #[derive(Clone)]
-// pub enum DerivativeGraphicsPipeline {
-//     Internal(Arc<VkGraphicsPipeline>),
-//     Wrapper(GraphicsPipeline)
-// }
-
-
-// #[derive(Clone)]
-// pub struct GraphicsPipeline {
-//     pipeline: Arc<VkGraphicsPipeline>
-// }
-// 
-// impl GraphicsPipeline {
-//     pub fn new<V: Vertex>(device: Arc<Device>, config: GraphicsPipelineBuilder) -> Result<Self> {
-// 
-//         let mut stages: SmallVec<[PipelineShaderStageCreateInfo; 5]> = smallvec![];
-//         
-//         for (module_index, entry_point_name) in config.entry_points {
-//             let module = &config.shader_modules[module_index as usize];
-//             let entry_point = module.entry_point(entry_point_name)
-//                 .ok_or_else(|| anyhow!("Unable to find entry point \"{}\" for shader module at index {}: {:?}", entry_point_name, module_index, module))?;
-//             
-//             let stage = PipelineShaderStageCreateInfo::new(entry_point);
-//             stages.push(stage);
-//         }
-// 
-//         let create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(device.clone())?;
-// 
-//         let pipeline_layout = PipelineLayout::new(device.clone(), create_info)?;
-//         
-//         let mut vertex_module_index = None;
-// 
-//         for (idx, stage) in stages.iter().enumerate() {
-// 
-//             if stage.entry_point.info().execution_model == ExecutionModel::Vertex {
-//                 vertex_module_index = Some(idx);
-//             }
-//         }
-//         
-//         if vertex_module_index.is_none() {
-//             return Err(anyhow!("config.vertex_module_index was not a valid index"));
-//         }
-// 
-//         let vertex_module_index = vertex_module_index.unwrap();
-//         
-//         let vertex_stage: &PipelineShaderStageCreateInfo = &stages[vertex_module_index];
-//         let vertex_input_state = V::per_vertex().definition(&vertex_stage.entry_point)?;
-// 
-//         let dynamic_state = HashSet::from_iter(config.dynamic_states);
-// 
-//         let mut flags = config.flags;
-//         
-//         let base_pipeline = 
-//             if let Some(DerivativeGraphicsPipeline::Internal(base_pipeline)) = config.base_pipeline {
-//                 Some(base_pipeline)
-//             } else if let Some(DerivativeGraphicsPipeline::Wrapper(base_pipeline)) = config.base_pipeline {
-//                 Some(base_pipeline.get())
-//             } else {
-//                 None
-//             };
-//         
-//         if base_pipeline.is_some() {
-//             flags |= PipelineCreateFlags::DERIVATIVE;
-//         }
-//         
-//         let create_info = GraphicsPipelineCreateInfo{
-//             flags: config.flags,
-//             stages,
-//             vertex_input_state: Some(vertex_input_state),
-//             input_assembly_state: config.input_assembly_state,
-//             tessellation_state: config.tessellation_state,
-//             viewport_state: config.viewport_state,
-//             rasterization_state: config.rasterization_state,
-//             multisample_state: config.multisample_state,
-//             depth_stencil_state: config.depth_stencil_state,
-//             color_blend_state: config.color_blend_state,
-//             dynamic_state,
-//             subpass: Some(config.subpass_type),
-//             base_pipeline,
-//             ..GraphicsPipelineCreateInfo::layout(pipeline_layout)
-//         };
-// 
-//         let pipeline = VkGraphicsPipeline::new(device.clone(), None, create_info)?;
-// 
-//         Ok(GraphicsPipeline{
-//             pipeline
-//         })
-//     }
-// 
-//     pub fn new_derived<V: Vertex>(base_pipeline: &GraphicsPipeline, mut config: GraphicsPipelineBuilder) -> Result<Self> {
-//         config.flags |= PipelineCreateFlags::DERIVATIVE;
-//         config.base_pipeline = Some(DerivativeGraphicsPipeline::Wrapper(base_pipeline.clone()));
-//         let graphics_pipeline = GraphicsPipeline::new::<V>(base_pipeline.pipeline.device().clone(), config)?;
-//         Ok(graphics_pipeline)
-//     }
-//     
-//     pub fn get(&self) -> Arc<VkGraphicsPipeline> {
-//         self.pipeline.clone()
-//     }
-// }

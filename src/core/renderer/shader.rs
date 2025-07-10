@@ -6,10 +6,10 @@ use shaderc::{CompilationArtifact, ShaderKind};
 
 
 fn compile_to_spirv(src: &str, kind: ShaderKind, entry_point_name: &str) -> CompilationArtifact {
-    let mut f = File::open(src).unwrap_or_else(|_| panic!("Could not open file {}", src));
+    let mut f = File::open(src).unwrap_or_else(|_| panic!("Could not open file {src}"));
     let mut glsl = String::new();
     f.read_to_string(&mut glsl)
-        .unwrap_or_else(|_| panic!("Could not read file {} to string", src));
+        .unwrap_or_else(|_| panic!("Could not read file {src} to string"));
 
     let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();

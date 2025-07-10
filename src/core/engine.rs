@@ -1,24 +1,23 @@
-use std::backtrace::Backtrace;
-use std::cell::Cell;
+use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
 use crate::core::{GraphicsManager, SceneRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
-use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use vulkano::command_buffer::{
+    RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
+};
 use vulkano::format::ClearValue;
-use crate::application::window::WindowResizedEvent;
 
-pub struct Context {
-}
+pub struct Context {}
 pub struct Engine {
     // pub rt: Runtime,
     pub window: Window,
     pub graphics: GraphicsManager,
     pub scene_renderer: SceneRenderer,
     user_app: Option<Box<dyn App>>,
-    event_window_resized: Option<ReaderId<WindowResizedEvent>>
+    event_window_resized: Option<ReaderId<WindowResizedEvent>>,
 }
 
 pub struct RenderContext<'a> {
@@ -28,9 +27,10 @@ pub struct RenderContext<'a> {
 }
 
 impl Engine {
-
     fn new<T>(user_app: T) -> Result<Self>
-    where T: App + 'static {
+    where
+        T: App + 'static,
+    {
         info!("Starting engine");
 
         // info!("Initializing Tokio runtime");
@@ -42,13 +42,12 @@ impl Engine {
         let graphics = GraphicsManager::new(window.sdl_window_handle())
             .inspect_err(|_| error!("Failed to create GraphicsManager"))?;
 
-        let scene_renderer = (SceneRenderer::new()
-            .inspect_err(|_| error!("Failed to create SceneRenderer"))?);
+        let scene_renderer =
+            SceneRenderer::new().inspect_err(|_| error!("Failed to create SceneRenderer"))?;
 
         // let user_app = Some(user_app);
         let user_app = Box::new(user_app);
         let user_app = Some(user_app as Box<dyn App>);
-
 
         let app = Engine {
             // rt,
@@ -56,14 +55,16 @@ impl Engine {
             graphics,
             scene_renderer,
             user_app,
-            event_window_resized: None
+            event_window_resized: None,
         };
 
         Ok(app)
     }
 
     fn start_internal<T>(user_app: T) -> Result<()>
-    where T: App + 'static {
+    where
+        T: App + 'static,
+    {
         set_default_env_var("RUST_LOG", "info");
         pretty_env_logger::init();
 
@@ -83,7 +84,9 @@ impl Engine {
     }
 
     pub fn start<T>(user_app: T)
-    where T: App + 'static {
+    where
+        T: App + 'static,
+    {
         if let Err(e) = Self::start_internal(user_app) {
             error!("An error occurred during engine execution");
             let backtrace = e.backtrace();
@@ -93,8 +96,8 @@ impl Engine {
             for e in chain {
                 error!("{e}");
             }
-            
-            error!("Backtrace:\n{}", backtrace);
+
+            error!("Backtrace:\n{backtrace}");
 
             // let mut src = e.source();
             // while let Some(e) = src {
@@ -119,15 +122,17 @@ impl Engine {
         let self_ptr: *mut Self = self;
 
         unsafe { self.user_app_mut().register_events(&mut *self_ptr) }?;
-        
-        unsafe { self.scene_renderer.register_events(&mut *self_ptr) }?;
 
+        unsafe { self.scene_renderer.register_events(&mut *self_ptr) }?;
 
         Ok(())
     }
-    
-    fn pre_render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
 
+    fn pre_render(
+        &mut self,
+        ticker: &mut Ticker,
+        cmd_buf: &mut PrimaryCommandBuffer,
+    ) -> Result<()> {
         if ticker.time_since_last_dbg() >= 1.0 {
             self.graphics.debug_print_ref_counts();
         }
@@ -135,9 +140,15 @@ impl Engine {
         // dirty hack ;)
         let self_ptr: *mut Self = self;
 
-        unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
+        unsafe {
+            self.user_app_mut()
+                .pre_render(ticker, &mut *self_ptr, cmd_buf)
+        }?;
 
-        unsafe { self.scene_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
+        unsafe {
+            self.scene_renderer
+                .pre_render(ticker, &mut *self_ptr, cmd_buf)
+        }?;
 
         Ok(())
     }
@@ -147,17 +158,20 @@ impl Engine {
 
         let framebuffer = self.graphics.get_current_framebuffer();
 
-        cmd_buf.begin_render_pass(RenderPassBeginInfo{
-            clear_values,
-            ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
-        }, SubpassBeginInfo{
-            contents: SubpassContents::Inline,
-            ..Default::default()
-        })?;
+        cmd_buf.begin_render_pass(
+            RenderPassBeginInfo {
+                clear_values,
+                ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+            },
+            SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..Default::default()
+            },
+        )?;
 
         // dirty hack ;)
         let self_ptr: *mut Self = self;
-        
+
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
@@ -170,7 +184,6 @@ impl Engine {
 
 impl Tickable for Engine {
     fn init(&mut self, ticker: &mut Ticker) -> Result<()> {
-        
         self.register_events()?;
 
         // dirty hack ;)
@@ -181,31 +194,33 @@ impl Tickable for Engine {
         unsafe { self.scene_renderer.init(&mut *self_ptr) }?;
 
         unsafe { self.user_app_mut().init(ticker, &mut *self_ptr) }?;
-        
+
         Ok(())
     }
 
     fn tick(&mut self, ticker: &mut Ticker) -> Result<()> {
-
         self.window.update();
         if self.window.did_quit() {
             ticker.stop();
         }
 
-        if let Some(event) = self.window.event_bus().read_one_opt(&mut self.event_window_resized) {
+        if let Some(event) = self
+            .window
+            .event_bus()
+            .read_one_opt(&mut self.event_window_resized)
+        {
             self.graphics.set_resolution(event.width, event.height)?;
         }
 
         match self.graphics.begin_frame() {
             BeginFrameResult::Begin(mut cmd_buf) => {
-
                 self.pre_render(ticker, &mut cmd_buf)?;
                 self.render(ticker, &mut cmd_buf)?;
 
                 self.graphics.present_frame(cmd_buf)?;
             }
             BeginFrameResult::Skip => {}
-            BeginFrameResult::Err(err) => return Err(err)
+            BeginFrameResult::Err(err) => return Err(err),
         }
 
         Ok(())
@@ -215,8 +230,6 @@ impl Tickable for Engine {
         self.user_app().is_stopped()
     }
 }
-
-
 
 fn set_default_env_var(key: &str, value: &str) {
     if std::env::var(key).is_err() {

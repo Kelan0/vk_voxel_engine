@@ -127,6 +127,7 @@ pub struct State {
     swapchain_recreated: bool,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for State {
     fn default() -> Self {
         State{
@@ -986,7 +987,7 @@ impl GraphicsManager {
         //     self.swapchain_info.command_buffers.insert(i as usize, cmd_buf.clone());
         // }
 
-        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames as usize, || {
+        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
             Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
         });
         
@@ -1170,7 +1171,7 @@ impl GraphicsManager {
     
     pub fn compile_spirv_from_source(&self, source: &str, file_identifier: &str, entry_point_name: &str, kind: ShaderKind, options: Option<&CompileOptions>) -> Result<CompilationArtifact> {
         let artifact = self.shader_compiler
-            .compile_into_spirv(&source, kind, file_identifier, entry_point_name, options)?;
+            .compile_into_spirv(source, kind, file_identifier, entry_point_name, options)?;
         
         Ok(artifact)
     }
@@ -1250,19 +1251,16 @@ impl GraphicsManager {
         let [width, height] = self.get_resolution();
 
         let (y, height) = if FLIP_Y {
-            (height as f32, -1.0 * height as f32)
+            (height as f32, -(height as f32))
         } else {
             (0.0, height as f32)
         };
 
-        let viewport = Viewport{
+        Viewport{
             offset: [0.0, y],
             extent: [width as f32, height],
             depth_range: 0.0..=1.0,
-        };
-        
-        // self.swapchain_info.viewport;
-        viewport
+        }
     }
 
     pub fn get_resolution_width(&self) -> u32 {
@@ -1290,7 +1288,7 @@ impl GraphicsManager {
     }
 
     pub fn get_current_frame_index(&self) -> usize {
-        self.current_frame_index as usize
+        self.current_frame_index
     }
 
     // pub fn get_current_graphics_cmd_buffer(&self) -> &Arc<CommandBuffer> {

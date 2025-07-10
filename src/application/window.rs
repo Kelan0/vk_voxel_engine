@@ -215,7 +215,7 @@ impl Window {
     
     pub fn get_aspect_ratio(&self) -> f32 {
         let size = self.get_window_size();
-        return size.x / size.y;
+        size.x / size.y
     }
     
     pub fn get_window_size_in_pixels(&self) -> Vec2 {
