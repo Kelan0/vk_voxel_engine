@@ -156,7 +156,7 @@ impl Engine {
     fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
         let clear_values = vec![Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0]))];
 
-        let framebuffer = self.graphics.get_current_framebuffer();
+        let framebuffer = self.graphics.current_framebuffer();
 
         cmd_buf.begin_render_pass(
             RenderPassBeginInfo {

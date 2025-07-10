@@ -854,7 +854,7 @@ impl GraphicsManager {
     }
 
     fn create_swapchain_framebuffers(&mut self) -> Result<()> {
-        let render_pass = self.get_render_pass();
+        let render_pass = self.render_pass();
 
         self.swapchain_info.framebuffers.clear();
 
@@ -991,7 +991,7 @@ impl GraphicsManager {
             Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
         });
         
-        info!("Created swapchain for resolution [{} x {}]", self.get_resolution_width(), self.get_resolution_height());
+        info!("Created swapchain for resolution [{} x {}]", self.resolution_width(), self.resolution_height());
 
 
         let new_extent = self.swapchain_info.image_extent;
@@ -1024,7 +1024,7 @@ impl GraphicsManager {
         let allocator = self.command_buffer_allocator.clone();
         let queue_family_index = self.queue_details.graphics_queue_family_index.unwrap();
 
-        let swapchain = match self.get_swapchain() {
+        let swapchain = match self.swapchain() {
             Ok(r) => r,
             Err(err) => return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to get swapchain"))
         };
@@ -1074,7 +1074,7 @@ impl GraphicsManager {
 
         let cmd_buf = cmd_buf.build()?;
 
-        let swapchain = self.get_swapchain()?.clone();
+        let swapchain = self.swapchain()?.clone();
         let image_index = self.swapchain_info.current_image_idx;
         let acquire_future = self.swapchain_info.acquire_future.take().unwrap();
 
@@ -1139,7 +1139,7 @@ impl GraphicsManager {
         Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
     }
 
-    fn get_swapchain(&self) -> Result<&Arc<Swapchain>> {
+    fn swapchain(&self) -> Result<&Arc<Swapchain>> {
         let swapchain = self.swapchain_info.swapchain.as_ref()
             .ok_or_else(|| anyhow!("Failed to get swapchain"))?;
         Ok(swapchain)
@@ -1149,23 +1149,23 @@ impl GraphicsManager {
         &mut self.event_bus
     }
 
-    pub fn get_device(&self) -> Arc<Device> {
+    pub fn device(&self) -> Arc<Device> {
         self.device.clone()
     }
     
-    pub fn get_memory_allocator(&self) -> Arc<StandardMemoryAllocator> {
+    pub fn memory_allocator(&self) -> Arc<StandardMemoryAllocator> {
         self.memory_allocator.clone()
     }
     
-    pub fn get_command_buffer_allocator(&self) -> Arc<StandardCommandBufferAllocator> {
+    pub fn command_buffer_allocator(&self) -> Arc<StandardCommandBufferAllocator> {
         self.command_buffer_allocator.clone()
     }
     
-    pub fn get_descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
+    pub fn descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
         self.descriptor_set_allocator.clone()
     }
     
-    pub fn get_shader_compiler(&self) -> Arc<Compiler> {
+    pub fn shader_compiler(&self) -> Arc<Compiler> {
         self.shader_compiler.clone()
     }
     
@@ -1195,11 +1195,11 @@ impl GraphicsManager {
         self.load_shader_module_from_source(source.as_str(), path, entry_point_name, kind, options)
     }
     
-    pub fn get_render_pass(&self) -> Arc<RenderPass> {
+    pub fn render_pass(&self) -> Arc<RenderPass> {
         self.render_pass.as_ref().unwrap().clone()
     }
 
-    pub fn get_queue_details(&self) -> &QueueDetails {
+    pub fn queue_details(&self) -> &QueueDetails {
         &self.queue_details
     }
 
@@ -1241,14 +1241,14 @@ impl GraphicsManager {
         Ok(true)
     }
 
-    pub fn get_resolution(&self) -> [u32; 2] {
+    pub fn resolution(&self) -> [u32; 2] {
         self.swapchain_info.image_extent
     }
     
     pub fn get_viewport(&self) -> Viewport {
         const FLIP_Y: bool = true;
 
-        let [width, height] = self.get_resolution();
+        let [width, height] = self.resolution();
 
         let (y, height) = if FLIP_Y {
             (height as f32, -(height as f32))
@@ -1263,31 +1263,31 @@ impl GraphicsManager {
         }
     }
 
-    pub fn get_resolution_width(&self) -> u32 {
+    pub fn resolution_width(&self) -> u32 {
         self.swapchain_info.image_extent[0]
     }
 
-    pub fn get_resolution_height(&self) -> u32 {
+    pub fn resolution_height(&self) -> u32 {
         self.swapchain_info.image_extent[1]
     }
 
-    pub fn get_color_format(&self) -> Format {
+    pub fn color_format(&self) -> Format {
         self.color_format
     }
 
-    pub fn get_color_space(&self) -> ColorSpace {
+    pub fn color_space(&self) -> ColorSpace {
         self.color_space
     }
     
-    pub fn get_current_framebuffer(&self) -> Arc<Framebuffer> {
+    pub fn current_framebuffer(&self) -> Arc<Framebuffer> {
         self.swapchain_info.framebuffers.get(self.swapchain_info.current_image_idx as usize).unwrap().clone()
     }
 
-    pub fn get_max_concurrent_frames(&self) -> usize {
+    pub fn max_concurrent_frames(&self) -> usize {
         self.max_concurrent_frames
     }
 
-    pub fn get_current_frame_index(&self) -> usize {
+    pub fn current_frame_index(&self) -> usize {
         self.current_frame_index
     }
 

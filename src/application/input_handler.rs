@@ -173,55 +173,55 @@ impl InputHandler {
         self.curr_mouse_pixel_coord = coord;
     }
     
-    pub fn get_mouse_pixel_coord(&self) -> Vec2 {
+    pub fn mouse_pixel_coord(&self) -> Vec2 {
         self.curr_mouse_pixel_coord
     }
 
-    pub fn get_last_mouse_pixel_coord(&self) -> Vec2 {
+    pub fn last_mouse_pixel_coord(&self) -> Vec2 {
         self.prev_mouse_pixel_coord
     }
 
-    pub fn get_mouse_screen_coord(&self) -> Vec2 {
+    pub fn mouse_screen_coord(&self) -> Vec2 {
         self.curr_mouse_pixel_coord / self.window_size
     }
 
-    pub fn get_last_mouse_screen_coord(&self) -> Vec2 {
+    pub fn last_mouse_screen_coord(&self) -> Vec2 {
         self.prev_mouse_pixel_coord / self.window_size
     }
 
-    pub fn get_mouse_pixel_motion(&self) -> Vec2 {
+    pub fn mouse_pixel_motion(&self) -> Vec2 {
         self.curr_mouse_pixel_motion
     }
 
-    pub fn get_last_mouse_pixel_motion(&self) -> Vec2 {
+    pub fn last_mouse_pixel_motion(&self) -> Vec2 {
         self.prev_mouse_pixel_motion
     }
 
-    pub fn get_mouse_screen_motion(&self) -> Vec2 {
+    pub fn mouse_screen_motion(&self) -> Vec2 {
         self.curr_mouse_pixel_motion / self.window_size
     }
 
-    pub fn get_last_mouse_screen_motion(&self) -> Vec2 {
+    pub fn last_mouse_screen_motion(&self) -> Vec2 {
         self.prev_mouse_pixel_motion / self.window_size
     }
 
-    pub fn get_mouse_drag_pixel_origin(&self, button: MouseBtn) -> Vec2 {
+    pub fn mouse_drag_pixel_origin(&self, button: MouseBtn) -> Vec2 {
         self.mouse_drag_pixel_origin[button as usize]
     }
 
-    pub fn get_mouse_drag_pixel_distance(&self, button: MouseBtn) -> Vec2 {
+    pub fn mouse_drag_pixel_distance(&self, button: MouseBtn) -> Vec2 {
         self.curr_mouse_pixel_coord - self.mouse_drag_pixel_origin[button as usize]
     }
 
-    pub fn get_mouse_drag_screen_origin(&self, button: MouseBtn) -> Vec2 {
+    pub fn mouse_drag_screen_origin(&self, button: MouseBtn) -> Vec2 {
         self.mouse_drag_pixel_origin[button as usize] / self.window_size
     }
 
-    pub fn get_mouse_drag_screen_distance(&self, button: MouseBtn) -> Vec2 {
+    pub fn mouse_drag_screen_distance(&self, button: MouseBtn) -> Vec2 {
         (self.curr_mouse_pixel_coord - self.mouse_drag_pixel_origin[button as usize]) / self.window_size 
     }
 
-    pub fn get_mouse_scroll_amount(&self) -> Vec2 {
+    pub fn mouse_scroll_amount(&self) -> Vec2 {
         self.scroll_amount
     }
     

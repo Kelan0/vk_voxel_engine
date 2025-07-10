@@ -78,7 +78,7 @@ impl App for TestGame {
 
         let indices = [0, 1, 2, 1, 3, 2];
 
-        let allocator = engine.graphics.get_memory_allocator();
+        let allocator = engine.graphics.memory_allocator();
 
         let mesh_config = MeshConfiguration {
             vertices: Vec::from(vertices),
@@ -161,8 +161,8 @@ impl App for TestGame {
 
         if window.is_mouse_grabbed() {
             let mouse_motion = window.input().relative_mouse_pos();
-            let delta_pitch = mouse_motion.y * ticker.get_delta_time() as f32 * 10.0;
-            let delta_yaw = mouse_motion.x * ticker.get_delta_time() as f32 * 10.0;
+            let delta_pitch = mouse_motion.y * ticker.delta_time() as f32 * 10.0;
+            let delta_yaw = mouse_motion.x * ticker.delta_time() as f32 * 10.0;
             self.camera_pitch = f32::clamp(self.camera_pitch + delta_pitch, -90.0, 90.0);
             self.camera_yaw += delta_yaw;
             if self.camera_yaw > 180.0 {
@@ -201,7 +201,7 @@ impl App for TestGame {
             }
 
             if move_dir.length_squared() > 0.001 {
-                let move_speed = 1.5 * ticker.get_delta_time() as f32;
+                let move_speed = 1.5 * ticker.delta_time() as f32;
                 move_dir = Vec3::normalize(move_dir) * move_speed;
                 camera.move_position(move_dir);
             }

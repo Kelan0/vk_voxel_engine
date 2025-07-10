@@ -317,7 +317,7 @@ impl<'a> Ticker<'a> {
         self.running
     }
 
-    pub fn get_desired_tick_rate(&self) -> f64 {
+    pub fn desired_tick_rate(&self) -> f64 {
         self.desired_tick_rate
     }
 
@@ -325,35 +325,35 @@ impl<'a> Ticker<'a> {
         self.desired_tick_rate = desired_tick_rate;
     }
 
-    pub fn get_measured_tick_rate(&self) -> f64 {
+    pub fn measured_tick_rate(&self) -> f64 {
         self.measured_tick_rate
     }
 
-    pub fn get_measured_idle_time(&self) -> f64 {
+    pub fn measured_idle_time(&self) -> f64 {
         self.measured_idle_time
     }
 
-    pub fn get_last_tick_duration(&self) -> f64 {
+    pub fn last_tick_duration(&self) -> f64 {
         self.last_tick_duration
     }
 
-    pub fn get_measured_tick_durations(&self) -> &VecDeque<(Instant, f64)> {
+    pub fn measured_tick_durations(&self) -> &VecDeque<(Instant, f64)> {
         &self.measured_tick_durations
     }
 
-    pub fn get_delta_time(&self) -> f64 {
+    pub fn delta_time(&self) -> f64 {
         self.delta_time
     }
 
-    pub fn get_simulation_time(&self) -> f64 {
+    pub fn simulation_time(&self) -> f64 {
         self.simulation_time
     }
 
-    pub fn get_real_time(&self) -> f64 {
+    pub fn real_time(&self) -> f64 {
         self.simulation_time
     }
 
-    pub fn get_idle_time(&self) -> f64 {
+    pub fn idle_time(&self) -> f64 {
         self.idle_time
     }
     
@@ -398,11 +398,11 @@ impl<'a> Ticker<'a> {
             tick_max_0_1pc_avg: 0.0,
         };
 
-        let mut ticks: Vec<_> = self.get_measured_tick_durations().clone().into_iter().collect();
+        let mut ticks: Vec<_> = self.measured_tick_durations().clone().into_iter().collect();
         if !ticks.is_empty() {
             stats.num_ticks = ticks.len() as u32;
             let now = Instant::now();
-            let dbg_duration = Duration::from_secs_f64(self.time_since_last_dbg() + self.get_last_tick_duration());
+            let dbg_duration = Duration::from_secs_f64(self.time_since_last_dbg() + self.last_tick_duration());
 
             for &(_, dur) in ticks.iter().rev().take_while(|&&(t, _dur)| now.duration_since(t) <= dbg_duration) {
                 stats.tick_avg += dur;

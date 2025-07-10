@@ -82,7 +82,7 @@ impl SceneRenderer {
 
 
     pub fn init(&mut self, engine: &mut Engine) -> Result<()> {
-        self.resources.resize_with(engine.graphics.get_max_concurrent_frames(), || FrameResource{
+        self.resources.resize_with(engine.graphics.max_concurrent_frames(), || FrameResource{
             uniform_buffer_camera: None,
             descriptor_set: None,
             update_descriptor_sets: false,
@@ -160,8 +160,8 @@ impl SceneRenderer {
 
     fn create_main_graphics_pipeline(&mut self, engine: &Engine) -> Result<()> {
         info!("Initialize GraphicsPipeline");
-        let device = engine.graphics.get_device();
-        let render_pass = engine.graphics.get_render_pass();
+        let device = engine.graphics.device();
+        let render_pass = engine.graphics.render_pass();
 
         let mut shader_source = String::new();
         let mut file = File::open("./res/shaders/test.glsl")?;
@@ -226,8 +226,8 @@ impl SceneRenderer {
             return Err(anyhow!("SceneRenderer - Unable to create descriptor sets because graphics pipeline is None"));
         }
 
-        let memory_allocator = engine.graphics.get_memory_allocator();
-        let descriptor_set_allocator = engine.graphics.get_descriptor_set_allocator();
+        let memory_allocator = engine.graphics.memory_allocator();
+        let descriptor_set_allocator = engine.graphics.descriptor_set_allocator();
 
         let buffer_create_info = BufferCreateInfo{
             usage: BufferUsage::UNIFORM_BUFFER,
@@ -263,7 +263,7 @@ impl SceneRenderer {
     }
 
     fn curr_resource<'a>(resources: &'a mut [FrameResource], engine: &Engine) -> &'a mut FrameResource {
-        Self::resource(resources, engine.graphics.get_current_frame_index())
+        Self::resource(resources, engine.graphics.current_frame_index())
     }
 
     fn resource(resources: &mut [FrameResource], index: usize) -> &mut FrameResource {
