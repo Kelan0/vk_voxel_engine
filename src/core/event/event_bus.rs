@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use log::error;
 use shrev::{EventChannel, EventIterator, ReaderId};
 
 pub use shrev::Event as Event;
@@ -44,6 +45,11 @@ impl EventBus {
     }
 
     pub fn read_opt<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> EventIterator<E> {
+        if cfg!(debug_assertions) {
+            if reader_id.is_none() {
+                error!("Tried to read EventBus for Option reader_id, but reader_id is None");
+            }
+        }
         let r = reader_id.as_mut().unwrap();
         self.read(r)
     }

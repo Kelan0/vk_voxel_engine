@@ -21,7 +21,7 @@ layout(location = 0) out vec3 fs_colour;
 void main() {
     fs_colour = vec3(colour);
 
-    gl_Position = camera.viewProjectionMatrix * vec4(position, 0.9, 1.0);
+    gl_Position = camera.viewProjectionMatrix * vec4(position, 0.0, 1.0);
 }
 #endif
 

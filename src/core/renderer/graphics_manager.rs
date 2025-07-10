@@ -28,6 +28,7 @@ use vulkano::sync::{AccessFlags, GpuFuture, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::memory::allocator::{StandardMemoryAllocator};
+use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use crate::core::event::{EventBus};
 
@@ -65,8 +66,8 @@ pub struct GraphicsManager {
     swapchain_image_sampled: bool,
     swapchain_info: SwapchainInfo,
     render_pass: Option<Arc<RenderPass>>,
-    max_concurrent_frames: u32,
-    current_frame_index: u32,
+    max_concurrent_frames: usize,
+    current_frame_index: usize,
     state: State,
 }
 
@@ -270,6 +271,9 @@ impl GraphicsManager {
             shader_uniform_buffer_array_dynamic_indexing: true,
             shader_storage_image_array_dynamic_indexing: true,
             shader_storage_buffer_array_dynamic_indexing: true,
+            wide_lines: true,
+            // smooth_lines: true,
+            // bresenham_lines: true,
             ..Default::default()
         };
 
@@ -1042,7 +1046,7 @@ impl GraphicsManager {
             debug!("acquire_next_image blocked for {:.4} msec", b.duration_since(a).as_secs_f64() * 1000.0)
         }
 
-        let _current_frame_index = self.current_frame_index as usize;
+        let _current_frame_index = self.current_frame_index;
         let current_frame_future = &mut self.swapchain_info.in_flight_frames[0];
 
         current_frame_future.cleanup_finished();
@@ -1100,7 +1104,7 @@ impl GraphicsManager {
             }
         };
 
-        let _current_frame_index = self.current_frame_index as usize;
+        let _current_frame_index = self.current_frame_index;
         self.swapchain_info.in_flight_frames[0] = future;
 
         let b = Instant::now();
@@ -1111,7 +1115,8 @@ impl GraphicsManager {
 
         self.swapchain_info.prev_image_idx = self.swapchain_info.current_image_idx;
         self.swapchain_info.current_image_idx = image_index;
-        self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
+        // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
+        self.current_frame_index = 0;
         Ok(true)
     }
 
@@ -1238,6 +1243,27 @@ impl GraphicsManager {
     pub fn get_resolution(&self) -> [u32; 2] {
         self.swapchain_info.image_extent
     }
+    
+    pub fn get_viewport(&self) -> Viewport {
+        const FLIP_Y: bool = true;
+
+        let [width, height] = self.get_resolution();
+
+        let (y, height) = if FLIP_Y {
+            (height as f32, -1.0 * height as f32)
+        } else {
+            (0.0, height as f32)
+        };
+
+        let viewport = Viewport{
+            offset: [0.0, y],
+            extent: [width as f32, height],
+            depth_range: 0.0..=1.0,
+        };
+        
+        // self.swapchain_info.viewport;
+        viewport
+    }
 
     pub fn get_resolution_width(&self) -> u32 {
         self.swapchain_info.image_extent[0]
@@ -1259,12 +1285,12 @@ impl GraphicsManager {
         self.swapchain_info.framebuffers.get(self.swapchain_info.current_image_idx as usize).unwrap().clone()
     }
 
-    pub fn get_max_concurrent_frames(&self) -> u32 {
+    pub fn get_max_concurrent_frames(&self) -> usize {
         self.max_concurrent_frames
     }
 
-    pub fn get_current_frame_index(&self) -> u32 {
-        self.current_frame_index
+    pub fn get_current_frame_index(&self) -> usize {
+        self.current_frame_index as usize
     }
 
     // pub fn get_current_graphics_cmd_buffer(&self) -> &Arc<CommandBuffer> {

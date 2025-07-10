@@ -1,7 +1,8 @@
 use std::backtrace::Backtrace;
+use std::cell::Cell;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
-use crate::core::GraphicsManager;
+use crate::core::{GraphicsManager, SceneRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -9,16 +10,20 @@ use vulkano::command_buffer::{RenderPassBeginInfo, SubpassBeginInfo, SubpassCont
 use vulkano::format::ClearValue;
 use crate::application::window::WindowResizedEvent;
 
+pub struct Context {
+}
 pub struct Engine {
     // pub rt: Runtime,
     pub window: Window,
     pub graphics: GraphicsManager,
+    pub scene_renderer: SceneRenderer,
     user_app: Option<Box<dyn App>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>
 }
 
 pub struct RenderContext<'a> {
-    pub engine: &'a mut Engine,
+    pub graphics: &'a mut GraphicsManager,
+    pub scene_renderer: &'a mut SceneRenderer,
     pub cmd_buf: &'a mut PrimaryCommandBuffer,
 }
 
@@ -35,16 +40,21 @@ impl Engine {
             .inspect_err(|_| error!("Failed to create application window"))?;
 
         let graphics = GraphicsManager::new(window.sdl_window_handle())
-            .inspect_err(|_| error!("Failed to initialize renderer"))?;
+            .inspect_err(|_| error!("Failed to create GraphicsManager"))?;
+
+        let scene_renderer = (SceneRenderer::new()
+            .inspect_err(|_| error!("Failed to create SceneRenderer"))?);
 
         // let user_app = Some(user_app);
         let user_app = Box::new(user_app);
         let user_app = Some(user_app as Box<dyn App>);
 
+
         let app = Engine {
             // rt,
             window,
             graphics,
+            scene_renderer,
             user_app,
             event_window_resized: None
         };
@@ -98,8 +108,22 @@ impl Engine {
         self.user_app.as_ref().unwrap().as_ref()
     }
 
-    fn register_events(&mut self) {
+    pub fn user_app_mut(&mut self) -> &mut Box<dyn App> {
+        self.user_app.as_mut().unwrap()
+    }
+
+    fn register_events(&mut self) -> Result<()> {
         self.event_window_resized = Some(self.window.event_bus().register::<WindowResizedEvent>());
+
+        // dirty hack ;)
+        let self_ptr: *mut Self = self;
+
+        unsafe { self.user_app_mut().register_events(&mut *self_ptr) }?;
+        
+        unsafe { self.scene_renderer.register_events(&mut *self_ptr) }?;
+
+
+        Ok(())
     }
     
     fn pre_render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
@@ -108,9 +132,12 @@ impl Engine {
             self.graphics.debug_print_ref_counts();
         }
 
-        let mut user_app = std::mem::take(&mut self.user_app);
-        user_app.as_mut().unwrap().pre_render(ticker, self, cmd_buf)?;
-        self.user_app = user_app;
+        // dirty hack ;)
+        let self_ptr: *mut Self = self;
+
+        unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
+
+        unsafe { self.scene_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         Ok(())
     }
@@ -128,40 +155,33 @@ impl Engine {
             ..Default::default()
         })?;
 
-        let mut user_app = std::mem::take(&mut self.user_app);
-        user_app.as_mut().unwrap().render(ticker, self, cmd_buf)?;
-        self.user_app = user_app;
+        // dirty hack ;)
+        let self_ptr: *mut Self = self;
+        
+        unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
+
+        unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 
         Ok(())
     }
-
 }
 
 impl Tickable for Engine {
     fn init(&mut self, ticker: &mut Ticker) -> Result<()> {
         
-        self.register_events();
+        self.register_events()?;
 
-        {
-            let mut user_app = std::mem::take(&mut self.user_app);
-            let result = user_app.as_mut().unwrap().register_events(self);
-            self.user_app = user_app;
-            result?;
-        }
-
-
+        // dirty hack ;)
+        let self_ptr: *mut Self = self;
 
         self.graphics.init()?;
-        
-        {
-            let mut user_app = std::mem::take(&mut self.user_app);
-            let result = user_app.as_mut().unwrap().init(ticker, self);
-            self.user_app = user_app;
-            result?;
-        }
 
+        unsafe { self.scene_renderer.init(&mut *self_ptr) }?;
+
+        unsafe { self.user_app_mut().init(ticker, &mut *self_ptr) }?;
+        
         Ok(())
     }
 
@@ -171,7 +191,7 @@ impl Tickable for Engine {
         if self.window.did_quit() {
             ticker.stop();
         }
-        
+
         if let Some(event) = self.window.event_bus().read_one_opt(&mut self.event_window_resized) {
             self.graphics.set_resolution(event.width, event.height)?;
         }
