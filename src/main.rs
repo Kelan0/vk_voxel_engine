@@ -2,17 +2,14 @@ mod application;
 mod core;
 mod util;
 
-use crate::application::Key;
 use crate::application::window::WindowResizedEvent;
-use crate::core::{
-    BaseVertex, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent,
-    WireframeMode,
-};
+use crate::application::Key;
+use crate::core::{BaseVertex, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, Transform, WireframeMode};
 use anyhow::Result;
-use application::App;
 use application::ticker::Ticker;
+use application::App;
 use core::Engine;
-use glam::Vec3;
+use glam::{Affine3A, DAffine3, Vec3};
 use log::{debug, info};
 use shrev::ReaderId;
 
@@ -86,13 +83,29 @@ impl App for TestGame {
         };
 
         let mesh = Mesh::new(allocator.clone(), mesh_config)?;
+        let render_component = RenderComponent::new(mesh);
 
-        engine.scene_renderer.add_mesh(mesh);
+        // engine.scene_renderer.add_mesh(mesh);
 
         let camera = engine.scene_renderer.camera_mut();
         camera.set_perspective(70.0, 4.0 / 3.0, 0.01, 100.0);
         camera.set_position(Vec3::new(1.0, 0.0, -3.0));
 
+        for i in 0..100 {
+            let x = i as f32;
+            
+            for j in 0..100 {
+                let z = j as f32;
+
+                engine.scene.create_entity("TestEntity")
+                    .add_component(render_component.clone())
+                    .add_component(Transform::new()
+                        .translate(Vec3::new(x, 0.0, z))
+                        .rotate_z(f32::to_radians(30.0))
+                        .clone());
+            }
+        }
+        
         Ok(())
     }
 

@@ -289,13 +289,13 @@ impl GraphicsManager {
 
         let memory_allocator = Self::create_memory_allocator(&device)
             .inspect_err(|_| error!("Error creating memory allocator"))?;
-        
+
         // let command_pools = Self::create_command_pools(&device, &queue_details)
         //     .inspect_err(|_| error!("Error creating command pools for renderer"))?;
-        
+
         let command_buffer_allocator = Self::create_command_buffer_allocator(&device)
             .inspect_err(|_| error!("Error creating command buffer allocator"))?;
-        
+
         let descriptor_set_allocator = Self::create_descriptor_set_allocator(&device)
             .inspect_err(|_| error!("Error creating command buffer allocator"))?;
 
@@ -347,7 +347,7 @@ impl GraphicsManager {
 
     pub fn init(&mut self) -> Result<()> {
         self.state.first_frame = true;
-        
+
         Ok(())
     }
 
@@ -662,11 +662,11 @@ impl GraphicsManager {
         // let create_info = GenericMemoryAllocatorCreateInfo{
         //     ..Default::default()
         // };
-        
+
         let allocator = StandardMemoryAllocator::new_default(device.clone());
         Ok(Arc::new(allocator))
     }
-    
+
     fn create_command_buffer_allocator(device: &Arc<Device>) -> Result<Arc<StandardCommandBufferAllocator>> {
         info!("Creating command buffer allocator for Vulkan");
         let create_info = StandardCommandBufferAllocatorCreateInfo{
@@ -680,7 +680,7 @@ impl GraphicsManager {
 
         // CommandBufferAllocator::new(device.clone(), 32, 0)
     }
-    
+
     fn create_descriptor_set_allocator(device: &Arc<Device>) -> Result<Arc<StandardDescriptorSetAllocator>> {
         info!("Creating descriptor set allocator for Vulkan");
         let create_info = StandardDescriptorSetAllocatorCreateInfo{
@@ -977,20 +977,20 @@ impl GraphicsManager {
             .inspect_err(|err| error!("Failed to create Framebuffers for the swapchain: {err}"))?;
 
         // self.swapchain_info.command_buffers.reserve(self.max_concurrent_frames as usize);
-        // 
+        //
         // for i in 0..self.max_concurrent_frames {
         //     let alloc_config = CommandBufferAllocConfiguration::new(&format!("swapchain_cmd{i}"));
-        // 
+        //
         //     let cmd_buf = self.get_graphics_command_pool_mut().allocate_command_buffer(CommandBufferLevel::Primary, alloc_config)
         //         .inspect_err(|err| error!("Failed to allocate command buffer {i} for swapchain: {err}"))?;
-        // 
+        //
         //     self.swapchain_info.command_buffers.insert(i as usize, cmd_buf.clone());
         // }
 
         self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
             Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
         });
-        
+
         info!("Created swapchain for resolution [{} x {}]", self.resolution_width(), self.resolution_height());
 
 
@@ -1152,27 +1152,27 @@ impl GraphicsManager {
     pub fn device(&self) -> Arc<Device> {
         self.device.clone()
     }
-    
+
     pub fn memory_allocator(&self) -> Arc<StandardMemoryAllocator> {
         self.memory_allocator.clone()
     }
-    
+
     pub fn command_buffer_allocator(&self) -> Arc<StandardCommandBufferAllocator> {
         self.command_buffer_allocator.clone()
     }
-    
+
     pub fn descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
         self.descriptor_set_allocator.clone()
     }
-    
+
     pub fn shader_compiler(&self) -> Arc<Compiler> {
         self.shader_compiler.clone()
     }
-    
+
     pub fn compile_spirv_from_source(&self, source: &str, file_identifier: &str, entry_point_name: &str, kind: ShaderKind, options: Option<&CompileOptions>) -> Result<CompilationArtifact> {
         let artifact = self.shader_compiler
             .compile_into_spirv(source, kind, file_identifier, entry_point_name, options)?;
-        
+
         Ok(artifact)
     }
 
@@ -1194,7 +1194,7 @@ impl GraphicsManager {
 
         self.load_shader_module_from_source(source.as_str(), path, entry_point_name, kind, options)
     }
-    
+
     pub fn render_pass(&self) -> Arc<RenderPass> {
         self.render_pass.as_ref().unwrap().clone()
     }
@@ -1206,16 +1206,16 @@ impl GraphicsManager {
     // pub fn get_command_pool(&self, queue_family_index: u32) -> Option<&CommandPool> {
     //     self.command_pools.get(&queue_family_index)
     // }
-    // 
+    //
     // pub fn get_command_pool_mut(&mut self, queue_family_index: u32) -> Option<&mut CommandPool> {
     //     self.command_pools.get_mut(&queue_family_index)
     // }
-    // 
+    //
     // pub fn get_graphics_command_pool(&self) -> &CommandPool {
     //     // We expect to always have a graphics command pool, these unwraps are fine.
     //     self.get_command_pool(self.queue_details.graphics_queue_family_index.unwrap()).unwrap()
     // }
-    // 
+    //
     // pub fn get_graphics_command_pool_mut(&mut self) -> &mut CommandPool {
     //     self.get_command_pool_mut(self.queue_details.graphics_queue_family_index.unwrap()).unwrap()
     // }
@@ -1244,7 +1244,7 @@ impl GraphicsManager {
     pub fn resolution(&self) -> [u32; 2] {
         self.swapchain_info.image_extent
     }
-    
+
     pub fn get_viewport(&self) -> Viewport {
         const FLIP_Y: bool = true;
 
@@ -1278,7 +1278,7 @@ impl GraphicsManager {
     pub fn color_space(&self) -> ColorSpace {
         self.color_space
     }
-    
+
     pub fn current_framebuffer(&self) -> Arc<Framebuffer> {
         self.swapchain_info.framebuffers.get(self.swapchain_info.current_image_idx as usize).unwrap().clone()
     }
@@ -1294,7 +1294,7 @@ impl GraphicsManager {
     // pub fn get_current_graphics_cmd_buffer(&self) -> &Arc<CommandBuffer> {
     //     let a = self.swapchain_info.command_buffers.get(self.current_frame_index as usize)
     //         .ok_or_else(|| anyhow!("Failed to get command buffer for frame {}", self.swapchain_info.current_frame_idx));
-    //     
+    //
     //     a.unwrap()
     // }
 

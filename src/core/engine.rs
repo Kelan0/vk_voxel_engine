@@ -9,21 +9,22 @@ use vulkano::command_buffer::{
     RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
 };
 use vulkano::format::ClearValue;
+use crate::core::scene::Scene;
+
+// Eww global state in Rust >:(
+static mut NEXT_RESOURCE_ID: u64 = 0;
+
 
 pub struct Context {}
 pub struct Engine {
     // pub rt: Runtime,
     pub window: Window,
     pub graphics: GraphicsManager,
+    pub scene: Scene,
     pub scene_renderer: SceneRenderer,
     user_app: Option<Box<dyn App>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
-}
-
-pub struct RenderContext<'a> {
-    pub graphics: &'a mut GraphicsManager,
-    pub scene_renderer: &'a mut SceneRenderer,
-    pub cmd_buf: &'a mut PrimaryCommandBuffer,
+    next_resource_id: u64,
 }
 
 impl Engine {
@@ -42,9 +43,12 @@ impl Engine {
         let graphics = GraphicsManager::new(window.sdl_window_handle())
             .inspect_err(|_| error!("Failed to create GraphicsManager"))?;
 
-        let scene_renderer =
-            SceneRenderer::new().inspect_err(|_| error!("Failed to create SceneRenderer"))?;
+        let scene = Scene::new()
+            .inspect_err(|_| error!("Failed to create Scene"))?;
 
+        let scene_renderer = SceneRenderer::new()
+            .inspect_err(|_| error!("Failed to create SceneRenderer"))?;
+        
         // let user_app = Some(user_app);
         let user_app = Box::new(user_app);
         let user_app = Some(user_app as Box<dyn App>);
@@ -53,9 +57,11 @@ impl Engine {
             // rt,
             window,
             graphics,
+            scene,
             scene_renderer,
             user_app,
             event_window_resized: None,
+            next_resource_id: 0,
         };
 
         Ok(app)
@@ -179,6 +185,18 @@ impl Engine {
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 
         Ok(())
+    }
+
+    /// Get a unique identifier for any resource that needs to be tracked
+    /// Resource IDs start at 1. zero is an invalid ID and can be used as default.
+    pub fn next_resource_id() -> u64 {
+        // self.next_resource_id += 1;
+        // self.next_resource_id
+
+        unsafe {
+            NEXT_RESOURCE_ID += 1;
+            NEXT_RESOURCE_ID
+        }
     }
 }
 

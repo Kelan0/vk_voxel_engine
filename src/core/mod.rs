@@ -3,9 +3,11 @@
 mod engine;
 mod renderer;
 mod event;
+mod scene;
 
 pub(crate) use engine::*;
 pub(crate) use renderer::*;
+pub(crate) use scene::*;
 #[allow(unused_imports)]
 pub(crate) use event::*;
 

@@ -350,7 +350,7 @@ impl<'a> Ticker<'a> {
     }
 
     pub fn real_time(&self) -> f64 {
-        self.simulation_time
+        self.real_time
     }
 
     pub fn idle_time(&self) -> f64 {

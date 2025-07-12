@@ -4,6 +4,8 @@ mod mesh;
 mod shader;
 mod camera;
 mod scene_renderer;
+mod render_pass;
+mod render_component;
 
 pub use graphics_manager::GraphicsManager;
 
@@ -11,5 +13,6 @@ pub use graphics_manager::GraphicsManager;
 pub(crate) use graphics_pipeline::*;
 pub(crate) use graphics_manager::*;
 pub(crate) use scene_renderer::*;
+pub(crate) use render_component::*;
 pub(crate) use mesh::*;
 pub(crate) use camera::*;

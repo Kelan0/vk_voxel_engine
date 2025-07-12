@@ -230,14 +230,14 @@ impl Camera {
         // yaw.to_degrees()
     }
 
-    pub fn update_camera_buffer(&self, camera_buffer: &mut CameraBufferUBO) {
+    pub fn update_camera_buffer(&self, camera_buffer: &mut CameraDataUBO) {
         camera_buffer.set_view_matrix(&self.view_matrix);
         camera_buffer.set_projection_matrix(&self.projection_matrix);
         camera_buffer.set_view_projection_matrix(&self.view_projection_matrix);
     }
 
-    pub fn get_camera_buffer(&self) -> CameraBufferUBO {
-        let mut camera_buffer = CameraBufferUBO::default();
+    pub fn get_camera_buffer(&self) -> CameraDataUBO {
+        let mut camera_buffer = CameraDataUBO::default();
         self.update_camera_buffer(&mut camera_buffer);
         camera_buffer
     }
@@ -262,15 +262,15 @@ impl Default for Camera {
 
 #[derive(BufferContents)]
 #[repr(C)]
-pub struct CameraBufferUBO {
+pub struct CameraDataUBO {
     pub view_matrix: [f32; 16],
     pub projection_matrix: [f32; 16],
     pub view_projection_matrix: [f32; 16],
 }
 
-impl CameraBufferUBO {
+impl CameraDataUBO {
     pub fn new() -> Self {
-        let mut val = CameraBufferUBO::default();
+        let mut val = CameraDataUBO::default();
         val.set_view_matrix(&Mat4::IDENTITY);
         val.set_projection_matrix(&Mat4::IDENTITY);
         val.set_view_projection_matrix(&Mat4::IDENTITY);
@@ -290,9 +290,9 @@ impl CameraBufferUBO {
     }
 }
 
-impl Default for CameraBufferUBO {
+impl Default for CameraDataUBO {
     fn default() -> Self {
-        CameraBufferUBO {
+        CameraDataUBO {
             view_matrix: [0.0; 16],
             projection_matrix: [0.0; 16],
             view_projection_matrix: [0.0; 16],

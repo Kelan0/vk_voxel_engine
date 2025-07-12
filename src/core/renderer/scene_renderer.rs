@@ -1,28 +1,29 @@
+use crate::application::Ticker;
+use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, Scene, Transform};
+use anyhow::anyhow;
+use anyhow::Result;
+use foldhash::HashMap;
+use log::{debug, error, info};
+use shaderc::{CompileOptions, ShaderKind};
+use shrev::ReaderId;
 use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
-use anyhow::anyhow;
-use anyhow::Result;
-use foldhash::HashMap;
-use log::{error, info};
-use shaderc::{CompileOptions, ShaderKind};
-use shrev::ReaderId;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
+use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::pipeline::graphics::viewport::ViewportState;
+use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
-use crate::application::Ticker;
-use crate::core::{Camera, CameraBufferUBO, Engine, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent};
+use vulkano::DeviceSize;
 
-#[derive(BufferContents, Vertex)]
+#[derive(BufferContents, Vertex, Clone, PartialEq)]
 #[repr(C)]
 pub struct BaseVertex {
     #[format(R32G32_SFLOAT)]
@@ -31,22 +32,59 @@ pub struct BaseVertex {
     pub colour: [f32; 3],
 }
 
+#[derive(BufferContents, Clone, Copy, Default)]
+#[repr(C)]
+struct ObjectDataUBO {
+    model_matrix: [f32; 16]
+    //    uint materialIndex;
+    //    uint _pad0;
+    //    uint _pad1;
+    //    uint _pad2;
+}
+
+#[derive(BufferContents, Clone, Copy, Default)]
+#[repr(C)]
+struct ObjectIndexUBO {
+    index: u32
+}
+
+struct RenderInfo {
+    mesh: Mesh<BaseVertex>,
+    index: u32,
+}
+
+#[derive(Clone)]
+struct BatchedDrawCommand {
+    mesh: Mesh<BaseVertex>,
+    first_instance: u32,
+    instance_count: u32,
+}
+
+
 pub struct SceneRenderer {
-    solid_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
+    graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     wire_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     resources: Vec<FrameResource>,
     wireframe_mode: WireframeMode,
     camera: Camera,
+    // meshes: Vec<Mesh<BaseVertex>>, // temporary
 
-    meshes: Vec<Mesh<BaseVertex>>, // temporary
+    render_info: Vec<RenderInfo>,
+    object_data: Vec<ObjectDataUBO>,
+    object_indices: Vec<ObjectIndexUBO>,
+    max_object_count: u32,
 
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
 }
 
 struct FrameResource {
-    uniform_buffer_camera: Option<Subbuffer<CameraBufferUBO>>,
-    descriptor_set: Option<Arc<DescriptorSet>>,
-    update_descriptor_sets: bool,
+    buffer_camera_uniforms: Option<Subbuffer<CameraDataUBO>>,
+    buffer_object_data: Option<Subbuffer<[ObjectDataUBO]>>,
+    buffer_object_indices: Option<Subbuffer<[ObjectIndexUBO]>>,
+    descriptor_set_camera: Option<Arc<DescriptorSet>>,
+    descriptor_set_world: Option<Arc<DescriptorSet>>,
+    descriptor_writes_world: Vec<WriteDescriptorSet>,
+    recreate_descriptor_sets: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,18 +94,23 @@ pub enum WireframeMode {
     Both,
 }
 
-
 impl SceneRenderer {
     pub fn new() -> Result<Self> {
 
         let scene_renderer = SceneRenderer{
-            solid_graphics_pipeline: None,
+
+            graphics_pipeline: None,
             wire_graphics_pipeline: None,
             resources: vec![],
             wireframe_mode: WireframeMode::Solid,
             camera: Camera::new(),
 
-            meshes: vec![],
+            render_info: vec![],
+            object_data: vec![],
+            object_indices: vec![],
+            // meshes: vec![],
+
+            max_object_count: 100,
 
             event_recreate_swapchain: None,
         };
@@ -82,11 +125,39 @@ impl SceneRenderer {
 
 
     pub fn init(&mut self, engine: &mut Engine) -> Result<()> {
-        self.resources.resize_with(engine.graphics.max_concurrent_frames(), || FrameResource{
-            uniform_buffer_camera: None,
-            descriptor_set: None,
-            update_descriptor_sets: false,
+        let memory_allocator = engine.graphics.memory_allocator();
+
+        self.resources.resize_with(engine.graphics.max_concurrent_frames(), || {
+            FrameResource{
+                buffer_camera_uniforms: None,
+                buffer_object_data: None,
+                buffer_object_indices: None,
+                descriptor_set_camera: None,
+                descriptor_set_world: None,
+                descriptor_writes_world: vec![],
+                recreate_descriptor_sets: true,
+            }
         });
+
+
+        for resource in &mut self.resources {
+
+            let buffer_create_info = BufferCreateInfo{
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            };
+
+            let allocation_info = AllocationCreateInfo{
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            };
+
+            let uniform_buffer_camera = Buffer::new_sized::<CameraDataUBO>(memory_allocator.clone(), buffer_create_info, allocation_info)?;
+            // let uniform_buffer_camera = Buffer::from_data(memory_allocator.clone(), buffer_create_info, allocation_info, camera_data)?;
+
+            resource.buffer_camera_uniforms = Some(uniform_buffer_camera);
+
+        }
         Ok(())
     }
 
@@ -95,8 +166,26 @@ impl SceneRenderer {
             self.on_recreate_swapchain(engine)?;
         }
 
+        let frame_index = engine.graphics.current_frame_index();
+        let resource = &mut self.resources[frame_index];
+
+        if resource.recreate_descriptor_sets {
+            resource.recreate_descriptor_sets = false;
+
+            let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
+            Self::create_descriptor_sets(resource, graphics_pipeline, &engine.graphics)?;
+        }
+
+        self.prepare_scene(&mut engine.scene);
+
+        let resource = &mut self.resources[frame_index];
+        Self::map_object_data_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
+        Self::map_object_indices_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
+
+        self.update_gpu_resources(engine)?;
+
         self.camera.update();
-        
+
         // info!("Camera position: {:?}, Direction: {:?} - fov={}, aspect={}, far={}", self.camera.position(), self.camera.z_axis(), self.camera.fov(), self.camera.aspect_ratio(), self.camera.far_plane());
 
 
@@ -110,50 +199,161 @@ impl SceneRenderer {
 
         let resource = Self::curr_resource(&mut self.resources, engine);
 
-        let uniform_buffer_camera = resource.uniform_buffer_camera.as_ref().unwrap();
+        let uniform_buffer_camera = resource.buffer_camera_uniforms.as_ref().unwrap();
 
         match uniform_buffer_camera.write() {
             Ok(mut write) => self.camera.update_camera_buffer(&mut write),
             Err(err) => error!("Unable to write camera data: {err}")
         }
-        
-        
-        let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
-        let descriptor_set = resource.descriptor_set.as_ref().unwrap();
-        let pipeline_layout = solid_graphics_pipeline.layout();
+
+        let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
+        let descriptor_set_camera = resource.descriptor_set_camera.as_ref().unwrap();
+        let descriptor_set_world = resource.descriptor_set_world.as_ref().unwrap();
+        let pipeline_layout = graphics_pipeline.layout();
 
         cmd_buf.set_viewport(0, [viewport].into_iter().collect())?;
-        cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set.clone()])?;
+        cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone()])?;
 
         if self.wireframe_mode == WireframeMode::Solid || self.wireframe_mode == WireframeMode::Both {
-            let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
+            let solid_graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(solid_graphics_pipeline.clone())?;
-            self.draw_scene(cmd_buf)?;
+            self.draw_scene(cmd_buf, &mut engine.scene)?;
         }
         if self.wireframe_mode == WireframeMode::Wire || self.wireframe_mode == WireframeMode::Both {
             let wire_graphics_pipeline = self.wire_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.clone())?;
-            self.draw_scene(cmd_buf)?;
+            self.draw_scene(cmd_buf, &mut engine.scene)?;
         }
 
         Ok(())
     }
 
-    fn draw_scene(&self, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
-        for mesh in self.meshes.iter() {
-            mesh.draw(cmd_buf, 1, 0)?;
+    fn prepare_scene(&mut self, scene: &mut Scene) {
+        let mut query = scene.world.query::<(&mut RenderComponent<BaseVertex>, &Transform)>();
+
+        self.render_info.clear();
+        self.object_data.clear();
+        self.object_indices.clear();
+
+        let mut index: u32 = 0;
+
+        for (render_component, transform) in query.iter(&scene.world) {
+
+            let mut object_data = ObjectDataUBO::default();
+            Self::update_object_date_transform(transform, &mut object_data);
+
+            self.render_info.push(RenderInfo{
+                mesh: render_component.mesh.clone(),
+                index
+            });
+
+            self.object_data.push(object_data);
+            self.object_indices.push(ObjectIndexUBO{ index });
+            index += 1;
         }
+
+        self.object_indices.sort_by(|lhs_idx, rhs_idx| {
+            let lhs = &self.render_info[lhs_idx.index as usize];
+            let rhs = &self.render_info[rhs_idx.index as usize];
+
+            lhs.mesh.cmp(&rhs.mesh)
+        });
+
+        if index > self.max_object_count {
+            // Grow the GPU buffers by 1.5x
+            // TODO: tune this value - We don't want to over-allocate memory, and we don't want to resize the buffers too often.
+            let growth_rate = 1.5;
+
+            let prev_max_objects = self.max_object_count;
+            self.max_object_count = (index as f32 * growth_rate).ceil() as u32;
+            debug!("SceneRenderer - Growing GPU buffers. Previous max objects: {prev_max_objects}, new max objects: {}", self.max_object_count);
+        }
+    }
+
+    fn update_object_date_transform(transform: &Transform, object_data_buffer: &mut ObjectDataUBO) {
+        transform.write_model_matrix(&mut object_data_buffer.model_matrix)
+    }
+
+    fn draw_scene(&self, cmd_buf: &mut PrimaryCommandBuffer, scene: &mut Scene) -> Result<()> {
+        let mut draw_commands = vec![];
+
+        let mut first_instance = 0;
+        let mut curr_draw_command = None;
+
+        for object_index in &self.object_indices {
+            let render_info = &self.render_info[object_index.index as usize];
+
+            if curr_draw_command.is_none() {
+                curr_draw_command = Some(BatchedDrawCommand{
+                    mesh: render_info.mesh.clone(),
+                    instance_count: 0,
+                    first_instance,
+                });
+            } else if curr_draw_command.as_ref().unwrap().mesh != render_info.mesh {
+                first_instance += curr_draw_command.as_ref().unwrap().instance_count;
+                draw_commands.push(curr_draw_command.as_ref().unwrap().clone());
+                curr_draw_command = Some(BatchedDrawCommand{
+                    mesh: render_info.mesh.clone(),
+                    instance_count: 0,
+                    first_instance,
+                });
+            }
+
+            curr_draw_command.as_mut().unwrap().instance_count += 1;
+        }
+        
+        if let Some(draw_command) = curr_draw_command && draw_command.instance_count > 0 {
+            draw_commands.push(draw_command);
+        }
+
+        for draw_command in draw_commands {
+            draw_command.mesh.draw(cmd_buf, draw_command.instance_count, draw_command.first_instance)?;
+        }
+
+        // let mut query = scene.world.query::<(Entity, &RenderComponent<BaseVertex>, &Transform)>();
+        //
+        // for (_entity, render_component, transform) in query.iter(&scene.world) {
+        //     render_component.mesh.draw(cmd_buf, 1, 0)?;
+        // }
+
+        Ok(())
+    }
+
+    pub fn update_gpu_resources(&mut self, engine: &Engine) -> Result<()>{
+
+        let frame_index = engine.graphics.current_frame_index();
+        let resource = &mut self.resources[frame_index];
+
+        if !resource.descriptor_writes_world.is_empty() {
+            let mut descriptor_set_world = resource.descriptor_set_world.as_mut().unwrap().clone();
+            let writes = mem::take(&mut resource.descriptor_writes_world);
+            debug!("Writing world info descriptor sets: {writes:?}");
+
+            unsafe { descriptor_set_world.update_by_ref(writes, []) }?
+
+        }
+
+
+        let buffer_object_data = resource.buffer_object_data.as_mut().unwrap();
+        debug_assert!(self.object_data.len() <= buffer_object_data.len() as usize);
+        let mut writer = buffer_object_data.write()?;
+        writer[..self.object_data.len()].copy_from_slice(self.object_data.as_slice());
+
+        let buffer_object_indices = resource.buffer_object_indices.as_mut().unwrap();
+        debug_assert!(self.object_indices.len() <= buffer_object_indices.len() as usize);
+        let mut writer = buffer_object_indices.write()?;
+        writer[..self.object_indices.len()].copy_from_slice(self.object_indices.as_slice());
+        
         Ok(())
     }
 
     fn on_recreate_swapchain(&mut self, engine: &mut Engine) -> Result<()> {
+        debug!("SceneRenderer - Recreate swapchain");
         self.create_main_graphics_pipeline(engine)?;
 
-        let mut resources = mem::take(&mut self.resources);
-        for resource in resources.iter_mut() {
-            self.create_descriptor_sets(engine, resource)?
+        for resource in self.resources.iter_mut() {
+            resource.recreate_descriptor_sets = true;
         }
-        self.resources = resources;
 
         Ok(())
     }
@@ -214,50 +414,108 @@ impl SceneRenderer {
             })
             .build_pipeline::<BaseVertex>(device.clone())?;
 
-        self.solid_graphics_pipeline = Some(main_graphics_pipeline);
+        self.graphics_pipeline = Some(main_graphics_pipeline);
         self.wire_graphics_pipeline = Some(wire_graphics_pipeline);
 
         Ok(())
     }
 
-    fn create_descriptor_sets(&self, engine: &Engine, resource: &mut FrameResource) -> Result<()> {
+    fn create_descriptor_sets(resource: &mut FrameResource, graphics_pipeline: &GraphicsPipeline, graphics: &GraphicsManager) -> Result<()> {
 
-        if self.solid_graphics_pipeline.is_none() {
-            return Err(anyhow!("SceneRenderer - Unable to create descriptor sets because graphics pipeline is None"));
-        }
+        debug!("SceneRenderer - create_descriptor_sets");
 
-        let memory_allocator = engine.graphics.memory_allocator();
-        let descriptor_set_allocator = engine.graphics.descriptor_set_allocator();
+        let descriptor_set_allocator = graphics.descriptor_set_allocator();
 
-        let buffer_create_info = BufferCreateInfo{
-            usage: BufferUsage::UNIFORM_BUFFER,
-            ..Default::default()
-        };
+        let buffer_camera_uniforms = resource.buffer_camera_uniforms.as_ref().unwrap();
 
-        let allocation_info = AllocationCreateInfo{
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        };
-
-        let uniform_buffer_camera = Buffer::new_sized::<CameraBufferUBO>(memory_allocator.clone(), buffer_create_info, allocation_info)?;
-        // let uniform_buffer_camera = Buffer::from_data(memory_allocator.clone(), buffer_create_info, allocation_info, camera_data)?;
-
-
-        let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
-
-
-        let pipeline_layout = solid_graphics_pipeline.layout();
+        let pipeline_layout = graphics_pipeline.layout();
         let descriptor_set_layouts = pipeline_layout.set_layouts();
 
+        // Camera info descriptor set
         let descriptor_set_layout_index = 0;
         let descriptor_set_layout = descriptor_set_layouts.get(descriptor_set_layout_index).unwrap();
-        let descriptor_writes = [WriteDescriptorSet::buffer(0, uniform_buffer_camera.clone())];
+        let descriptor_writes = [WriteDescriptorSet::buffer(0, buffer_camera_uniforms.clone())];
         let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), descriptor_writes, [])?;
+        resource.descriptor_set_camera = Some(descriptor_set);
 
+        // World info descriptor set
+        let descriptor_set_layout_index = 1;
+        let descriptor_set_layout = descriptor_set_layouts.get(descriptor_set_layout_index).unwrap();
+        let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), [], [])?;
+        resource.descriptor_set_world = Some(descriptor_set);
 
-        resource.uniform_buffer_camera = Some(uniform_buffer_camera.clone());
-        resource.descriptor_set = Some(descriptor_set);
-        resource.update_descriptor_sets = true;
+        if let Some(buffer) = &resource.buffer_object_data {
+            resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(0, buffer.clone()));
+        }
+        if let Some(buffer) = &resource.buffer_object_indices {
+            resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(1, buffer.clone()));
+        }
+
+        Ok(())
+    }
+
+    fn map_object_data_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
+        let max_buffer_size: DeviceSize = (size_of::<ObjectDataUBO>() * max_object_count) as DeviceSize;
+
+        if let Some(buffer) = &resource.buffer_object_data {
+            if max_buffer_size > buffer.size() {
+                // Existing buffer is too small. It will be re-allocated
+                resource.buffer_object_data = None;
+            }
+        }
+
+        if resource.buffer_object_data.is_none() {
+            debug!("Allocating ObjectData GPU buffer for {max_object_count} objects");
+
+            let buffer_create_info = BufferCreateInfo{
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            };
+
+            let allocation_info = AllocationCreateInfo{
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            };
+
+            let buffer_object_data = Buffer::new_slice::<ObjectDataUBO>(memory_allocator.clone(), buffer_create_info, allocation_info, max_object_count as DeviceSize)?;
+
+            resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(0, buffer_object_data.clone()));
+
+            resource.buffer_object_data = Some(buffer_object_data);
+        }
+
+        Ok(())
+    }
+
+    fn map_object_indices_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
+        let max_buffer_size: DeviceSize = (size_of::<ObjectIndexUBO>() * max_object_count) as DeviceSize;
+
+        if let Some(buffer) = &resource.buffer_object_indices {
+            if max_buffer_size > buffer.size() {
+                // Existing buffer is too small. It will be re-allocated
+                resource.buffer_object_indices = None;
+            }
+        }
+
+        if resource.buffer_object_indices.is_none() {
+            debug!("Allocating ObjectIndices GPU buffer for {max_object_count} objects");
+
+            let buffer_create_info = BufferCreateInfo{
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            };
+
+            let allocation_info = AllocationCreateInfo{
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            };
+
+            let buffer_object_indices = Buffer::new_slice::<ObjectIndexUBO>(memory_allocator.clone(), buffer_create_info, allocation_info, max_object_count as DeviceSize)?;
+
+            resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(1, buffer_object_indices.clone()));
+
+            resource.buffer_object_indices = Some(buffer_object_indices);
+        }
 
         Ok(())
     }
@@ -271,9 +529,9 @@ impl SceneRenderer {
         &mut resources[index]
     }
 
-    pub fn add_mesh(&mut self, mesh: Mesh<BaseVertex>) {
-        self.meshes.push(mesh);
-    }
+    // pub fn add_mesh(&mut self, mesh: Mesh<BaseVertex>) {
+    //     self.meshes.push(mesh);
+    // }
 
     pub fn set_wireframe_mode(&mut self, wireframe_mode: WireframeMode) {
         self.wireframe_mode = wireframe_mode;
@@ -282,11 +540,11 @@ impl SceneRenderer {
     pub fn wireframe_mode(&self) -> WireframeMode {
         self.wireframe_mode
     }
-    
+
     pub fn camera(&self) -> &Camera {
         &self.camera
     }
-    
+
     pub fn camera_mut(&mut self) -> &mut Camera {
         &mut self.camera
     }
