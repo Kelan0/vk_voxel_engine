@@ -151,21 +151,20 @@ impl Engine {
         // dirty hack ;)
         let self_ptr: *mut Self = self;
 
-        unsafe {
-            self.user_app_mut()
-                .pre_render(ticker, &mut *self_ptr, cmd_buf)
-        }?;
+        unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
-        unsafe {
-            self.scene_renderer
-                .pre_render(ticker, &mut *self_ptr, cmd_buf)
-        }?;
-
+        unsafe { self.scene_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
+        
+        unsafe { self.scene.pre_render(ticker, &mut *self_ptr) }?;
+        
         Ok(())
     }
 
     fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
-        let clear_values = vec![Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0]))];
+        let clear_values = vec![
+            Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0])),
+            Some(ClearValue::Depth(1.0))
+        ];
 
         let framebuffer = self.graphics.current_framebuffer();
 
@@ -186,8 +185,6 @@ impl Engine {
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
-        
-        unsafe { self.scene.render(ticker, &mut *self_ptr) }?;
         
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 

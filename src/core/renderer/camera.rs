@@ -195,7 +195,7 @@ impl Camera {
     }
 
     pub fn z_axis(&self) -> Vec3 {
-        self.orientation * Vec3::Y
+        self.orientation * Vec3::Z
     }
 
     pub fn euler_angles(&self) -> (f32, f32, f32) {

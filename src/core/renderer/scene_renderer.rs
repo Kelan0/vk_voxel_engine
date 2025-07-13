@@ -16,6 +16,7 @@ use bevy_ecs::error::info;
 use bevy_ecs::prelude::Added;
 use bevy_ecs::query::With;
 use bevy_ecs::system::command::insert_batch;
+use glam::Vec3;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, RawBuffer, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter, StandardMemoryAllocator};
@@ -29,6 +30,7 @@ use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPo
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
 use vulkano::memory::MappedMemoryRange;
+use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 
 #[derive(BufferContents, Vertex, Clone, PartialEq)]
 #[repr(C)]
@@ -37,6 +39,15 @@ pub struct BaseVertex {
     pub position: [f32; 2],
     #[format(R32G32B32_SFLOAT)]
     pub colour: [f32; 3],
+}
+
+impl BaseVertex {
+    pub fn new(position: Vec3, colour: Vec3) -> Self {
+        BaseVertex {
+            position: [ position.x, position.y ],
+            colour: [ colour.x, colour.y, colour.z ]
+        }
+    }
 }
 
 #[derive(BufferContents, Clone, Copy, Default)]
@@ -543,6 +554,11 @@ impl SceneRenderer {
                 polygon_mode: PolygonMode::Fill,
                 cull_mode: CullMode::None,
                 front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            })
+            .set_depth_stencil_state(DepthStencilState{
+                depth: Some(DepthState{ write_enable: true, compare_op: CompareOp::Less }),
+                // depth_bounds: Some(0.0..=1.0),
                 ..Default::default()
             })
             .set_color_blend_state(ColorBlendState{

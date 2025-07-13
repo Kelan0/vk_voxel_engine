@@ -18,8 +18,8 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture,
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
-use vulkano::image::view::ImageView;
-use vulkano::image::{Image, ImageLayout, ImageUsage, SampleCount};
+use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
+use vulkano::image::{Image, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::MemoryHeapFlags;
@@ -28,7 +28,7 @@ use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode,
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
-use vulkano::memory::allocator::{StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::sync::future::FenceSignalFuture;
@@ -84,7 +84,7 @@ type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFutu
 pub struct SwapchainInfo {
     swapchain: Option<Arc<Swapchain>>,
     images: Vec<Arc<Image>>,
-    image_views: Vec<Arc<ImageView>>,
+    image_views: Vec<(Arc<ImageView>, Arc<ImageView>)>,
     framebuffers: Vec<Arc<Framebuffer>>,
     // command_buffers: Vec<Arc<CommandBuffer>>,
     acquire_future: Option<SwapchainAcquireFuture>,
@@ -746,14 +746,25 @@ impl GraphicsManager {
             ..Default::default()
         };
 
-        let subpass_description = SubpassDescription{
-            color_attachments: vec![
-                Some(AttachmentReference{attachment: 0, layout: ImageLayout::ColorAttachmentOptimal, ..Default::default()})
-            ],
+        let depth_attachment = AttachmentDescription{
+            format: self.depth_format,
+            samples: SampleCount::Sample1,
+            load_op: AttachmentLoadOp::Clear,
+            store_op: AttachmentStoreOp::Store,
+            stencil_load_op: Some(AttachmentLoadOp::DontCare),
+            stencil_store_op: Some(AttachmentStoreOp::DontCare),
+            initial_layout: ImageLayout::Undefined,
+            final_layout: ImageLayout::DepthStencilAttachmentOptimal,
             ..Default::default()
         };
 
-        let subpass_dependency = SubpassDependency{
+        let subpass_description = SubpassDescription{
+            color_attachments: vec![ Some(AttachmentReference{attachment: 0, layout: ImageLayout::ColorAttachmentOptimal, ..Default::default()}) ],
+            depth_stencil_attachment: Some(AttachmentReference{attachment: 1, layout: ImageLayout::DepthStencilAttachmentOptimal, ..Default::default()}),
+            ..Default::default()
+        };
+
+        let subpass_dependency_colour = SubpassDependency{
             src_subpass: None,
             dst_subpass: Some(0),
             src_stages: PipelineStages::COLOR_ATTACHMENT_OUTPUT,
@@ -763,10 +774,20 @@ impl GraphicsManager {
             ..Default::default()
         };
 
+        let subpass_dependency_depth = SubpassDependency{
+            src_subpass: None,
+            dst_subpass: Some(0),
+            src_stages: PipelineStages::EARLY_FRAGMENT_TESTS | PipelineStages::LATE_FRAGMENT_TESTS,
+            dst_stages: PipelineStages::EARLY_FRAGMENT_TESTS | PipelineStages::LATE_FRAGMENT_TESTS,
+            src_access: AccessFlags::empty(),
+            dst_access: AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            ..Default::default()
+        };
+
         let create_info = RenderPassCreateInfo{
-            attachments: vec![color_attachment],
+            attachments: vec![color_attachment, depth_attachment],
             subpasses: vec![subpass_description],
-            dependencies: vec![subpass_dependency],
+            dependencies: vec![subpass_dependency_colour, subpass_dependency_depth],
             ..Default::default()
         };
 
@@ -856,9 +877,33 @@ impl GraphicsManager {
         self.swapchain_info.image_views = vec![];
 
         for image in &self.swapchain_info.images {
-            let image_view = ImageView::new_default(image.clone())?;
+            let image_view_colour = ImageView::new_default(image.clone())?;
+            
+            let depth_image_create_info = ImageCreateInfo{
+                image_type: ImageType::Dim2d,
+                format: self.depth_format,
+                extent: [self.swapchain_info.image_extent[0], self.swapchain_info.image_extent[1], 1],
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                ..Default::default()
+            };
+            
+            let allocation_info = AllocationCreateInfo{
+                ..Default::default()
+            };
+            
+            let depth_image = Image::new(self.memory_allocator.clone(), depth_image_create_info, allocation_info)?;
+            
+            let depth_image_view_create_info = ImageViewCreateInfo{
+                view_type: ImageViewType::Dim2d,
+                format: self.depth_format,
+                subresource_range: ImageSubresourceRange::from_parameters(self.depth_format, 1, 1),
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                ..Default::default()
+            };
+            
+            let image_view_depth = ImageView::new(depth_image.clone(), depth_image_view_create_info)?;
 
-            self.swapchain_info.image_views.push(image_view);
+            self.swapchain_info.image_views.push((image_view_colour, image_view_depth));
         }
 
         Ok(())
@@ -869,10 +914,10 @@ impl GraphicsManager {
 
         self.swapchain_info.framebuffers.clear();
 
-        for image_view in &self.swapchain_info.image_views {
+        for (colour_image_view, depth_image_view) in &self.swapchain_info.image_views {
 
             let create_info = FramebufferCreateInfo{
-                attachments: vec![image_view.clone()],
+                attachments: vec![colour_image_view.clone(), depth_image_view.clone()],
                 extent: self.swapchain_info.image_extent,
                 layers: 1,
                 ..Default::default()
@@ -1066,9 +1111,9 @@ impl GraphicsManager {
         // }
         // self.current_frame_index = frame_index;
 
-        if b.duration_since(a) > Duration::from_secs_f64(10.0 / 1000.0) {
-            info!("[{}] Blocked for frame GPU Fence for {:.4} msec", self.current_frame_index, b.duration_since(a).as_secs_f64() * 1000.0);
-        }
+        // if b.duration_since(a) > Duration::from_secs_f64(10.0 / 1000.0) {
+        //     info!("[{}] Blocked for frame GPU Fence for {:.4} msec", self.current_frame_index, b.duration_since(a).as_secs_f64() * 1000.0);
+        // }
 
         // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
 

@@ -56,7 +56,7 @@ impl Scene {
         }
     }
     
-    pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+    pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         // let r = self.world.increment_change_tick();
         self.world.clear_trackers();
 

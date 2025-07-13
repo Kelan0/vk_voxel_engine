@@ -28,6 +28,11 @@ impl Transform {
         self
     }
 
+    pub fn transform_local(&mut self, affine: Affine3A) -> &mut Transform {
+        self.affine = self.affine * affine;
+        self
+    }
+
     pub fn set_translation_a(&mut self, translation: Vec3A) -> &mut Self {
         self.affine.translation = translation;
         self
@@ -103,6 +108,27 @@ impl Transform {
 
     pub fn rotate_z(&mut self, angle: f32) -> &mut Self {
         self.transform(Affine3A {
+            matrix3: Mat3A::from_rotation_y(angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_local_x(&mut self, angle: f32) -> &mut Self {
+        self.transform_local(Affine3A {
+            matrix3: Mat3A::from_rotation_x(angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_local_y(&mut self, angle: f32) -> &mut Self {
+        self.transform_local(Affine3A {
+            matrix3: Mat3A::from_rotation_y(angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_local_z(&mut self, angle: f32) -> &mut Self {
+        self.transform_local(Affine3A {
             matrix3: Mat3A::from_rotation_y(angle),
             translation: Vec3A::ZERO,
         })
