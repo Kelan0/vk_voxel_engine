@@ -2,22 +2,30 @@ mod application;
 mod core;
 mod util;
 
+use std::fs;
+use std::sync::Arc;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{BaseVertex, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, Transform, WireframeMode};
+use crate::core::{BaseVertex, Mesh, MeshConfiguration, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
+use bevy_ecs::entity::Entity;
+use bevy_ecs::error::info;
+use bevy_ecs::observer::TriggerTargets;
 use application::ticker::Ticker;
 use application::App;
 use core::Engine;
 use glam::{Affine3A, DAffine3, Vec3};
-use log::{debug, info};
+use log::{debug, error, info};
 use shrev::ReaderId;
+use crate::application::ticker::TickProfileStatistics;
 
 struct TestGame {
     camera_pitch: f32,
     camera_yaw: f32,
+    move_speed: f32,
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
+    debug_stats: Vec<TickProfileStatistics>,
 }
 
 impl TestGame {
@@ -25,8 +33,10 @@ impl TestGame {
         TestGame {
             camera_pitch: 0.0,
             camera_yaw: 0.0,
+            move_speed: 3.0,
             event_recreate_swapchain: None,
             event_window_resized: None,
+            debug_stats: vec![]
         }
     }
 
@@ -51,39 +61,41 @@ impl App for TestGame {
     fn init(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         info!("Init TestGame");
         let window = &mut engine.window;
-        ticker.set_desired_tick_rate(175.0);
+        ticker.set_desired_tick_rate(0.0);
         window.set_visible(true);
 
+        let allocator = engine.graphics.memory_allocator();
+
         let vertices = [
-            BaseVertex {
-                position: [-0.5, 1.5],
-                colour: [0.0, 1.0, 0.0],
-            },
-            BaseVertex {
-                position: [0.5, 0.5],
-                colour: [1.0, 1.0, 0.0],
-            },
-            BaseVertex {
-                position: [-0.5, -0.5],
-                colour: [0.0, 0.0, 0.0],
-            },
-            BaseVertex {
-                position: [0.5, -0.5],
-                colour: [1.0, 0.0, 0.0],
-            },
+            BaseVertex { position: [-0.5, 1.5], colour: [0.0, 1.0, 0.0] },
+            BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 0.0] },
+            BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 0.0] },
+            BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 0.0] },
         ];
 
         let indices = [0, 1, 2, 1, 3, 2];
 
-        let allocator = engine.graphics.memory_allocator();
-
-        let mesh_config = MeshConfiguration {
+        let mesh1 = Arc::new(Mesh::new(allocator.clone(), MeshConfiguration {
             vertices: Vec::from(vertices),
             indices: Some(Vec::from(indices)),
-        };
+        })?);
 
-        let mesh = Mesh::new(allocator.clone(), mesh_config)?;
-        let render_component = RenderComponent::new(mesh);
+        let vertices = [
+            BaseVertex { position: [-0.5, 0.5], colour: [0.0, 1.0, 1.0] },
+            BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 1.0] },
+            BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 1.0] },
+            BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 1.0] },
+        ];
+
+        let indices = [0, 1, 2, 1, 3, 2];
+
+        let mesh2 = Arc::new(Mesh::new(allocator.clone(), MeshConfiguration {
+            vertices: Vec::from(vertices),
+            indices: Some(Vec::from(indices)),
+        })?);
+
+        let render_component_1 = RenderComponent::new(mesh1, RenderType::Static);
+        let render_component_2 = RenderComponent::new(mesh2, RenderType::Dynamic);
 
         // engine.scene_renderer.add_mesh(mesh);
 
@@ -91,20 +103,37 @@ impl App for TestGame {
         camera.set_perspective(70.0, 4.0 / 3.0, 0.01, 100.0);
         camera.set_position(Vec3::new(1.0, 0.0, -3.0));
 
-        for i in 0..100 {
+        let num_x = 1000;
+        let num_z = 1000;
+        for i in 0..num_x {
             let x = i as f32;
-            
-            for j in 0..100 {
+
+            for j in 0..num_z {
                 let z = j as f32;
 
-                engine.scene.create_entity("TestEntity")
-                    .add_component(render_component.clone())
+                engine.scene.create_entity("TestEntity1")
+                    .add_component(render_component_1.clone())
                     .add_component(Transform::new()
                         .translate(Vec3::new(x, 0.0, z))
                         .rotate_z(f32::to_radians(30.0))
                         .clone());
             }
         }
+
+        engine.scene.create_entity("TestEntity2")
+            .add_component(render_component_2.clone())
+            .add_component(Transform::new()
+                .translate(Vec3::new(0.0, 2.0, 0.0))
+                .rotate_z(f32::to_radians(30.0))
+                .clone())
+            .add_component(UpdateComponent{
+                on_render: Box::new(|entity: Entity, ticker: &mut Ticker, engine: &mut Engine| {
+                    let mut entity = engine.scene.world.entity_mut(entity);
+                    entity.modify_component(|transform: &mut Transform| {
+                        transform.rotate_y(f64::to_radians(30.0 * ticker.delta_time()) as f32);
+                    });
+                })
+            });
         
         Ok(())
     }
@@ -134,10 +163,15 @@ impl App for TestGame {
         }
 
         if ticker.time_since_last_dbg() >= 1.0 {
+
             let stats = ticker.calculate_profiling_statistics();
 
             debug!("{stats:?}");
+            
+            self.debug_stats.push(stats);
+
         }
+
         Ok(())
     }
 
@@ -174,8 +208,8 @@ impl App for TestGame {
 
         if window.is_mouse_grabbed() {
             let mouse_motion = window.input().relative_mouse_pos();
-            let delta_pitch = mouse_motion.y * ticker.delta_time() as f32 * 10.0;
-            let delta_yaw = mouse_motion.x * ticker.delta_time() as f32 * 10.0;
+            let delta_pitch = mouse_motion.y * 0.04;
+            let delta_yaw = mouse_motion.x * 0.04;
             self.camera_pitch = f32::clamp(self.camera_pitch + delta_pitch, -90.0, 90.0);
             self.camera_yaw += delta_yaw;
             if self.camera_yaw > 180.0 {
@@ -183,6 +217,16 @@ impl App for TestGame {
             }
             if self.camera_yaw < -180.0 {
                 self.camera_yaw += 360.0;
+            }
+
+            let scroll = window.input().mouse_scroll_amount().y;
+
+            if scroll > 0.0 {
+                self.move_speed *= 1.5;
+                info!("Scroll up - move speed: {}", self.move_speed);
+            } else if scroll < 0.0 {
+                self.move_speed /= 1.5;
+                info!("Scroll down - move speed: {}", self.move_speed);
             }
 
             let camera = engine.scene_renderer.camera_mut();
@@ -214,13 +258,25 @@ impl App for TestGame {
             }
 
             if move_dir.length_squared() > 0.001 {
-                let move_speed = 1.5 * ticker.delta_time() as f32;
+                let move_speed = self.move_speed * ticker.delta_time() as f32;
                 move_dir = Vec3::normalize(move_dir) * move_speed;
                 camera.move_position(move_dir);
             }
         }
 
         Ok(())
+    }
+
+    fn shutdown(&mut self) {
+        let mut file = String::new();
+        for stat in &self.debug_stats {
+            let s = format!("{stat:?}\n");
+            file.push_str(s.as_str())
+        }
+
+        if let Err(e) = fs::write("./debug_stats.txt", file) {
+            error!("Failed to write performance statistics: {e}");
+        }
     }
 
     fn is_stopped(&self) -> bool {

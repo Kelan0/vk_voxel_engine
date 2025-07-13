@@ -1,7 +1,10 @@
 use anyhow::Result;
 use bevy_ecs::bundle::Bundle;
 use bevy_ecs::component::Component;
+use bevy_ecs::prelude::Added;
 use bevy_ecs::world::{EntityWorldMut, World};
+use crate::application::Ticker;
+use crate::core::{BaseVertex, Engine, RenderComponent};
 
 pub struct Scene {
     pub world: World,
@@ -10,6 +13,11 @@ pub struct Scene {
 #[derive(Component)]
 pub struct EntityNameComponent {
     name: String
+}
+
+#[derive(Component)]
+pub struct UpdateComponent {
+    pub on_render: Box<dyn Fn(bevy_ecs::entity::Entity, &mut Ticker, &mut Engine) + Send + Sync + 'static>,
 }
 
 pub struct Entity<'a> {
@@ -46,5 +54,19 @@ impl Scene {
             id: entity,
             // scene: self
         }
+    }
+    
+    pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+        // let r = self.world.increment_change_tick();
+        self.world.clear_trackers();
+
+        let mut query = self.world.query::<(bevy_ecs::entity::Entity, &mut UpdateComponent)>();
+        
+        for (entity, update_component) in query.iter(&self.world) {
+            let on_render = &update_component.on_render;
+            on_render(entity, ticker, engine);
+        }
+        
+        Ok(())
     }
 }

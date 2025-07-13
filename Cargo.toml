@@ -26,4 +26,7 @@ bevy_ecs = "0.16.1"
 #tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "sync", "macros" ] }
 
 #[profile.dev]
-#opt-level = 1 
+#opt-level = 1
+
+[profile.release]
+debug = true

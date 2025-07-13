@@ -86,7 +86,12 @@ impl Engine {
         update_loop.add_tickable(app);
         update_loop.start_blocking();
 
-        update_loop.take_result()
+
+        let result = update_loop.take_result();
+            
+        app.shutdown();
+
+        result
     }
 
     pub fn start<T>(user_app: T)
@@ -181,10 +186,16 @@ impl Engine {
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
-
+        
+        unsafe { self.scene.render(ticker, &mut *self_ptr) }?;
+        
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 
         Ok(())
+    }
+    
+    fn shutdown(&mut self) {
+        self.user_app_mut().shutdown();
     }
 
     /// Get a unique identifier for any resource that needs to be tracked

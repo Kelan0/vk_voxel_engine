@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, Scene, Transform};
+use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform};
 use anyhow::anyhow;
 use anyhow::Result;
 use foldhash::HashMap;
@@ -10,7 +10,13 @@ use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use bevy_ecs::component::Component;
+use bevy_ecs::entity::Entity;
+use bevy_ecs::error::info;
+use bevy_ecs::prelude::Added;
+use bevy_ecs::query::With;
+use bevy_ecs::system::command::insert_batch;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, RawBuffer, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
@@ -22,6 +28,7 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
+use vulkano::memory::MappedMemoryRange;
 
 #[derive(BufferContents, Vertex, Clone, PartialEq)]
 #[repr(C)]
@@ -49,16 +56,21 @@ struct ObjectIndexUBO {
 }
 
 struct RenderInfo {
-    mesh: Mesh<BaseVertex>,
+    mesh: Arc<Mesh<BaseVertex>>,
     index: u32,
 }
 
 #[derive(Clone)]
 struct BatchedDrawCommand {
-    mesh: Mesh<BaseVertex>,
+    mesh: Arc<Mesh<BaseVertex>>,
     first_instance: u32,
     instance_count: u32,
 }
+
+#[derive(Component)]
+struct StaticRenderComponentMarker;
+#[derive(Component)]
+struct DynamicRenderComponentMarker;
 
 
 pub struct SceneRenderer {
@@ -72,7 +84,10 @@ pub struct SceneRenderer {
     render_info: Vec<RenderInfo>,
     object_data: Vec<ObjectDataUBO>,
     object_indices: Vec<ObjectIndexUBO>,
+    static_object_count: u32,
+    dynamic_object_count: u32,
     max_object_count: u32,
+    static_scene_changed: bool,
 
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
 }
@@ -110,7 +125,10 @@ impl SceneRenderer {
             object_indices: vec![],
             // meshes: vec![],
 
+            static_object_count: 0,
+            dynamic_object_count: 0,
             max_object_count: 100,
+            static_scene_changed: false,
 
             event_recreate_swapchain: None,
         };
@@ -162,6 +180,9 @@ impl SceneRenderer {
     }
 
     pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+
+        self.static_scene_changed = false;
+        
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;
         }
@@ -176,13 +197,23 @@ impl SceneRenderer {
             Self::create_descriptor_sets(resource, graphics_pipeline, &engine.graphics)?;
         }
 
-        self.prepare_scene(&mut engine.scene);
+        self.check_changed_entities(&mut engine.scene);
+        
+        self.prepare_static_scene(&mut engine.scene);
+        self.prepare_dynamic_scene(&mut engine.scene);
+        
+        self.update_buffer_capacity();
 
         let resource = &mut self.resources[frame_index];
         Self::map_object_data_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
         Self::map_object_indices_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
 
-        self.update_gpu_resources(engine)?;
+        let r = self.update_gpu_resources(engine);
+
+
+        if let Err(r) = r {
+            error!("Error writing buffers for frame: {} - Error was: {}", frame_index, r);
+        }
 
         self.camera.update();
 
@@ -224,19 +255,60 @@ impl SceneRenderer {
             cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.clone())?;
             self.draw_scene(cmd_buf, &mut engine.scene)?;
         }
-
+        
         Ok(())
     }
 
-    fn prepare_scene(&mut self, scene: &mut Scene) {
-        let mut query = scene.world.query::<(&mut RenderComponent<BaseVertex>, &Transform)>();
+    fn check_changed_entities(&mut self, scene: &mut Scene) {
 
+        let mut static_batch = vec![];
+        let mut dynamic_batch = vec![];
+
+        let mut query_added = scene.world.query_filtered::<(Entity, &mut RenderComponent<BaseVertex>), Added<RenderComponent<BaseVertex>>>();
+        
+        for (entity, render_component) in query_added.iter(&scene.world) {
+
+            match render_component.render_type {
+                RenderType::Static => static_batch.push((entity, StaticRenderComponentMarker{})),
+                RenderType::Dynamic => dynamic_batch.push((entity, DynamicRenderComponentMarker{}))
+            };
+        }
+
+        if static_batch.len() > 0 {
+            debug!("{} Static RenderComponent entities were added - change tick: {:?} to {:?}", static_batch.len(), scene.world.last_change_tick(), scene.world.change_tick());
+            scene.world.insert_batch(static_batch);
+            self.static_scene_changed = true;
+        }
+
+        if dynamic_batch.len() > 0 {
+            debug!("{} Dynamic RenderComponent entities were added - change tick: {:?} to {:?}", dynamic_batch.len(), scene.world.last_change_tick(), scene.world.change_tick());
+            scene.world.insert_batch(dynamic_batch);
+        }
+
+        let query_removed: Vec<Entity> = scene.world.removed::<RenderComponent<BaseVertex>>().collect();
+        for entity in query_removed {
+            scene.world.entity_mut(entity).remove::<(StaticRenderComponentMarker, DynamicRenderComponentMarker)>();
+        }
+    }
+
+    fn prepare_static_scene(&mut self, scene: &mut Scene) {
+        if !self.static_scene_changed {
+            return; // Do nothing.
+        }
+        
+        let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<StaticRenderComponentMarker>>();
+        
+        let start_index = 0;
+        
         self.render_info.clear();
         self.object_data.clear();
         self.object_indices.clear();
 
         let mut index: u32 = 0;
 
+        // let iter = query.par_iter(&scene.world);
+
+        // TODO: par_iter
         for (render_component, transform) in query.iter(&scene.world) {
 
             let mut object_data = ObjectDataUBO::default();
@@ -252,20 +324,66 @@ impl SceneRenderer {
             index += 1;
         }
 
-        self.object_indices.sort_by(|lhs_idx, rhs_idx| {
+        self.object_indices[start_index..].sort_by(|lhs_idx, rhs_idx| {
             let lhs = &self.render_info[lhs_idx.index as usize];
             let rhs = &self.render_info[rhs_idx.index as usize];
 
             lhs.mesh.cmp(&rhs.mesh)
         });
 
-        if index > self.max_object_count {
+        self.static_object_count = index;
+    }
+    
+    fn prepare_dynamic_scene(&mut self, scene: &mut Scene) {
+
+        let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<DynamicRenderComponentMarker>>();
+
+        let start_index = self.static_object_count as usize;
+        
+        self.render_info.truncate(start_index);
+        self.object_data.truncate(start_index);
+        self.object_indices.truncate(start_index);
+
+        let mut index: u32 = self.static_object_count;
+
+        // let iter = query.par_iter(&scene.world);
+
+        // TODO: par_iter
+        for (render_component, transform) in query.iter(&scene.world) {
+
+            let mut object_data = ObjectDataUBO::default();
+            Self::update_object_date_transform(transform, &mut object_data);
+
+            self.render_info.push(RenderInfo{
+                mesh: render_component.mesh.clone(),
+                index
+            });
+
+            self.object_data.push(object_data);
+            self.object_indices.push(ObjectIndexUBO{ index });
+            index += 1;
+        }
+
+        self.object_indices[start_index..].sort_by(|lhs_idx, rhs_idx| {
+            let lhs = &self.render_info[lhs_idx.index as usize];
+            let rhs = &self.render_info[rhs_idx.index as usize];
+
+            lhs.mesh.cmp(&rhs.mesh)
+        });
+        
+        self.dynamic_object_count = index - self.static_object_count;
+    }
+    
+    fn update_buffer_capacity(&mut self) {
+        let num_objects = self.static_object_count + self.dynamic_object_count;
+        
+        if num_objects > self.max_object_count {
             // Grow the GPU buffers by 1.5x
             // TODO: tune this value - We don't want to over-allocate memory, and we don't want to resize the buffers too often.
             let growth_rate = 1.5;
 
             let prev_max_objects = self.max_object_count;
-            self.max_object_count = (index as f32 * growth_rate).ceil() as u32;
+            self.max_object_count = (num_objects as f32 * growth_rate).ceil() as u32;
             debug!("SceneRenderer - Growing GPU buffers. Previous max objects: {prev_max_objects}, new max objects: {}", self.max_object_count);
         }
     }
@@ -301,7 +419,7 @@ impl SceneRenderer {
 
             curr_draw_command.as_mut().unwrap().instance_count += 1;
         }
-        
+
         if let Some(draw_command) = curr_draw_command && draw_command.instance_count > 0 {
             draw_commands.push(draw_command);
         }
@@ -333,16 +451,44 @@ impl SceneRenderer {
 
         }
 
+        let static_count = self.static_object_count as usize;
+        let dynamic_count = self.dynamic_object_count as usize;
+        let static_begin = 0;
+        let static_end = static_begin + static_count;
+        let dynamic_begin = static_end;
+        let dynamic_end = dynamic_begin + dynamic_count;
+        
+        if static_count > 0 || dynamic_count > 0 {
+            
+            {
+                let buffer_object_data = resource.buffer_object_data.as_mut().unwrap();
+                debug_assert!(self.object_data.len() <= buffer_object_data.len() as usize);
+                let mut writer = buffer_object_data.write()?;
 
-        let buffer_object_data = resource.buffer_object_data.as_mut().unwrap();
-        debug_assert!(self.object_data.len() <= buffer_object_data.len() as usize);
-        let mut writer = buffer_object_data.write()?;
-        writer[..self.object_data.len()].copy_from_slice(self.object_data.as_slice());
+                if self.static_scene_changed && static_count > 0 {
+                    writer[static_begin..static_end].copy_from_slice(&self.object_data[static_begin..static_end]);
+                }
+                if dynamic_count > 0 {
+                    writer[dynamic_begin..dynamic_end].copy_from_slice(&self.object_data[dynamic_begin..dynamic_end]);
+                }
+                // writer[..self.object_data.len()].copy_from_slice(self.object_data.as_slice());
+            }
 
-        let buffer_object_indices = resource.buffer_object_indices.as_mut().unwrap();
-        debug_assert!(self.object_indices.len() <= buffer_object_indices.len() as usize);
-        let mut writer = buffer_object_indices.write()?;
-        writer[..self.object_indices.len()].copy_from_slice(self.object_indices.as_slice());
+
+            {
+                let buffer_object_indices = resource.buffer_object_indices.as_mut().unwrap();
+                debug_assert!(self.object_indices.len() <= buffer_object_indices.len() as usize);
+                let mut writer = buffer_object_indices.write()?;
+                writer[..self.object_indices.len()].copy_from_slice(self.object_indices.as_slice());
+
+                if self.static_scene_changed && static_count > 0 {
+                    writer[static_begin..static_end].copy_from_slice(&self.object_indices[static_begin..static_end]);
+                }
+                if dynamic_count > 0 {
+                    writer[dynamic_begin..dynamic_end].copy_from_slice(&self.object_indices[dynamic_begin..dynamic_end]);
+                }
+            }
+        }
         
         Ok(())
     }

@@ -45,6 +45,7 @@ pub struct Ticker<'a> {
 #[derive(Clone, PartialEq)]
 
 pub struct TickProfileStatistics {
+    pub time: f64,
     pub avg_count: u32,
     pub tick_avg: f64,
     pub tick_min: f64,
@@ -60,7 +61,8 @@ pub struct TickProfileStatistics {
 
 impl Debug for TickProfileStatistics{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[For prev {} ticks]: Average: {:.3} msec - Min: {:.3} msec - Max: {:.3} msec /// [For prev {} ticks]: Low 10%: {:.3} msec - Low 1%: {:.3} msec - Low 0.1%: {:.3} msec",
+        write!(f, "{:.3} sec : [For prev {} ticks]: Average: {:.3} msec - Min: {:.3} msec - Max: {:.3} msec /// [For prev {} ticks]: Low 10%: {:.3} msec - Low 1%: {:.3} msec - Low 0.1%: {:.3} msec",
+               self.time,
                self.avg_count,
                self.tick_avg * 1000.0,
                self.tick_min * 1000.0,
@@ -199,7 +201,11 @@ impl<'a> Ticker<'a> {
         let desired_tick_rate = if is_unlocked { 1000.0 } else { self.desired_tick_rate };
         let expected_tick_duration: f64 = 1.0 / desired_tick_rate;
 
-        self.partial_tick += elapsed_time / expected_tick_duration;
+        if is_unlocked {
+            self.partial_tick = 1.0;
+        } else {
+            self.partial_tick += elapsed_time / expected_tick_duration;
+        }
 
         if self.partial_tick >= 1.0 {
             self.delta_time = self.tick_start_time.duration_since(self.last_tick).as_secs_f64();
@@ -212,13 +218,19 @@ impl<'a> Ticker<'a> {
             }
 
             self.tick_rate_count += 1;
-            self.simulation_time += expected_tick_duration;
+            
+            self.real_time = self.tick_start_time.duration_since(self.start_time).as_secs_f64();
+            
+            if is_unlocked {
+                self.simulation_time = self.real_time 
+            } else {
+                self.simulation_time += expected_tick_duration;
+            }
 
             // ==== HANDLE DEBUG MEASUREMENTS ====
 
             let time_since_dbg = self.time_since_last_dbg();
             if time_since_dbg >= 1.0 {
-                self.real_time = self.tick_start_time.duration_since(self.start_time).as_secs_f64();
                 let missed_time = self.real_time - self.simulation_time;
                 self.accumulated_missed_time += missed_time - self.last_missed_time;
                 self.last_missed_time = missed_time;
@@ -244,7 +256,7 @@ impl<'a> Ticker<'a> {
 
             let tick_end_time = Instant::now();
             let current_tick_duration = tick_end_time.duration_since(self.tick_start_time).as_secs_f64();
-            let remaining_tick_duration = expected_tick_duration - current_tick_duration;
+            let remaining_tick_duration = if is_unlocked { 0.0 } else { expected_tick_duration - current_tick_duration };
 
             let current_time = self.tick_start_time;
 
@@ -385,6 +397,7 @@ impl<'a> Ticker<'a> {
     pub fn calculate_profiling_statistics(&self) -> TickProfileStatistics {
 
         let mut stats = TickProfileStatistics{
+            time: Instant::now().duration_since(self.start_time).as_secs_f64(),
             avg_count: 0,
             tick_avg: 0.0,
             tick_min: f64::MAX,

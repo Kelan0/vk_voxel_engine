@@ -10,10 +10,11 @@ use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use bevy_ecs::error::info;
 use shaderc::{CompilationArtifact, CompileOptions, Compiler, ShaderKind};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
@@ -23,13 +24,14 @@ use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType,
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::MemoryHeapFlags;
 use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency, SubpassDescription};
-use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
+use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::memory::allocator::{StandardMemoryAllocator};
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
+use vulkano::sync::future::FenceSignalFuture;
 use crate::core::event::{EventBus};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
@@ -76,6 +78,9 @@ struct UpdateSwapchainRequest {
     image_extent: [u32; 2],
 }
 
+// This type is annoying...
+type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<SwapchainAcquireFuture>>>;
+
 pub struct SwapchainInfo {
     swapchain: Option<Arc<Swapchain>>,
     images: Vec<Arc<Image>>,
@@ -83,7 +88,8 @@ pub struct SwapchainInfo {
     framebuffers: Vec<Arc<Framebuffer>>,
     // command_buffers: Vec<Arc<CommandBuffer>>,
     acquire_future: Option<SwapchainAcquireFuture>,
-    in_flight_frames: Vec<Box<dyn GpuFuture>>,
+    // in_flight_frames: Vec<Box<dyn GpuFuture>>,
+    in_flight_frames: Vec<Option<InFlightFrameFuture>>,
     current_image_idx: u32,
     prev_image_idx: u32,
     image_extent: [u32; 2],
@@ -347,6 +353,11 @@ impl GraphicsManager {
 
     pub fn init(&mut self) -> Result<()> {
         self.state.first_frame = true;
+
+        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
+            // sync::now(self.device.clone())
+            None
+        });
 
         Ok(())
     }
@@ -892,8 +903,12 @@ impl GraphicsManager {
         self.create_render_pass()
             .inspect_err(|_| error!("Failed to create RenderPass"))?;
 
-        self.swapchain_info.in_flight_frames.clear();
         self.swapchain_info.acquire_future = None;
+        self.swapchain_info.in_flight_frames.clear();
+        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
+            // sync::now(self.device.clone())
+            None
+        });
 
         // self.swapchain_info.command_buffers.clear();
         // for i in 0..self.max_concurrent_frames {
@@ -987,10 +1002,6 @@ impl GraphicsManager {
         //     self.swapchain_info.command_buffers.insert(i as usize, cmd_buf.clone());
         // }
 
-        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
-            Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
-        });
-
         info!("Created swapchain for resolution [{} x {}]", self.resolution_width(), self.resolution_height());
 
 
@@ -1011,6 +1022,56 @@ impl GraphicsManager {
     }
 
     pub fn begin_frame(&mut self) -> BeginFrameResult {
+
+        // _ = self.flush_rendering(); // DEBUG
+
+        let a = Instant::now();
+
+        if let Some(future) = &mut self.swapchain_info.in_flight_frames[self.current_frame_index] {
+            future.cleanup_finished();
+            future.wait(None).expect("Failed to wait on GPU Fence future");
+
+            // let is_signaled = future.is_signaled().expect("Failed to check GPU Fence future for current frame");
+            // if !is_signaled {
+            //     // let a = Instant::now();
+            //     // let b = Instant::now();
+            //     // info!("[{}] Blocked for frame GPU Fence for {:.4} msec", i, b.duration_since(a).as_secs_f64() * 1000.0);
+            // }
+        }
+
+        // let mut num_checks = 0;
+        //
+        // let mut frame_index = self.current_frame_index;
+        // frame_index = (frame_index + 1) % self.max_concurrent_frames;
+        //
+        // loop {
+        //     let future = &mut self.swapchain_info.in_flight_frames[frame_index];
+        //
+        //     num_checks += 1;
+        //
+        //     if let Some(future) = future {
+        //         if future.wait(Some(Duration::from_secs(0))).is_ok() {
+        //             future.cleanup_finished();
+        //             break;
+        //         }
+        //     } else {
+        //         break;
+        //     }
+        // }
+
+        let b = Instant::now();
+
+        // if num_checks > 1 {
+        //     debug!("Took {num_checks} attempts to get next frame [{} to {}] in {:.4} msec", self.current_frame_index, frame_index, b.duration_since(a).as_secs_f64() * 1000.0)
+        // }
+        // self.current_frame_index = frame_index;
+
+        if b.duration_since(a) > Duration::from_secs_f64(10.0 / 1000.0) {
+            info!("[{}] Blocked for frame GPU Fence for {:.4} msec", self.current_frame_index, b.duration_since(a).as_secs_f64() * 1000.0);
+        }
+
+        // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
+
 
         if self.update_swapchain_request.is_some() {
             if let Err(err) = self.recreate_swapchain() {
@@ -1047,12 +1108,6 @@ impl GraphicsManager {
             debug!("acquire_next_image blocked for {:.4} msec", b.duration_since(a).as_secs_f64() * 1000.0)
         }
 
-        let _current_frame_index = self.current_frame_index;
-        let current_frame_future = &mut self.swapchain_info.in_flight_frames[0];
-
-        current_frame_future.cleanup_finished();
-
-
         if is_suboptimal {
             self.request_recreate_swapchain();
         }
@@ -1060,7 +1115,7 @@ impl GraphicsManager {
         self.swapchain_info.current_image_idx = image_index;
         self.swapchain_info.acquire_future = Some(acquire_future);
 
-        let cmd_buf = match AutoCommandBufferBuilder::primary(allocator, queue_family_index, CommandBufferUsage::OneTimeSubmit) {
+        let cmd_buf = match AutoCommandBufferBuilder::primary(allocator, queue_family_index, CommandBufferUsage::MultipleSubmit) {
             Ok(r) => r,
             Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to allocate command buffer for begin_frame"))
         };
@@ -1093,20 +1148,20 @@ impl GraphicsManager {
 
         let future = match future {
             Ok(future) => {
-                Box::new(future) as Box<dyn GpuFuture>
+                // Box::new(future) as Box<dyn GpuFuture>
+                Some(future)
             }
             Err(Validated::Error(VulkanError::OutOfDate)) => {
                 self.request_recreate_swapchain();
-                self.sync_now()
+                // self.sync_now()
+                None
             }
             Err(err) => {
                 error!("Failed to flush future: {err:?}");
-                self.sync_now()
+                // self.sync_now()
+                None
             }
         };
-
-        let _current_frame_index = self.current_frame_index;
-        self.swapchain_info.in_flight_frames[0] = future;
 
         let b = Instant::now();
 
@@ -1114,21 +1169,30 @@ impl GraphicsManager {
             debug!("signal_fence_and_flush blocked for {:.4} msec", b.duration_since(a).as_secs_f64() * 1000.0)
         }
 
+        self.swapchain_info.in_flight_frames[self.current_frame_index] = future;
+
         self.swapchain_info.prev_image_idx = self.swapchain_info.current_image_idx;
         self.swapchain_info.current_image_idx = image_index;
-        // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
-        self.current_frame_index = 0;
+
         Ok(true)
     }
 
     pub fn flush_rendering(&mut self) -> Result<()>{
         for frame_future in self.swapchain_info.in_flight_frames.iter_mut() {
-            frame_future.cleanup_finished();
+            if let Some(future) = frame_future {
+                future.cleanup_finished();
+                future.wait(None)?;
+            }
 
-            let mut prev_frame_end = Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>;
-            mem::swap(&mut prev_frame_end, frame_future);
-            prev_frame_end.cleanup_finished();
+            *frame_future = None;
+
+            // let mut prev_frame_end = Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>;
+            // mem::swap(&mut prev_frame_end, frame_future);
+            // prev_frame_end.cleanup_finished();
         }
+
+
+
 
         unsafe { self.device.wait_idle() }?;
 

@@ -12,6 +12,8 @@ pub trait App {
     fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()>;
     
     fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()>;
+    
+    fn shutdown(&mut self) {}
 
     fn is_stopped(&self) -> bool;
 }
