@@ -71,8 +71,8 @@ pub struct GraphicsManager {
     swapchain_image_sampled: bool,
     swapchain_info: SwapchainInfo,
     render_pass: Option<Arc<RenderPass>>,
-    max_concurrent_frames: usize,
-    current_frame_index: usize,
+    // max_concurrent_frames: usize,
+    // current_frame_index: usize,
     state: State,
     debug_pipeline_statistics: Option<DebugPipelineStatistics>,
     current_timestamp_query_index: u32,
@@ -85,9 +85,12 @@ struct UpdateSwapchainRequest {
 }
 
 // This type is annoying...
-type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<SwapchainAcquireFuture>>>;
+// type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<SwapchainAcquireFuture>>>;
 // type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<FenceSignalFuture<SwapchainAcquireFuture>>>>;
 // type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<JoinFuture<SwapchainAcquireFuture, Box<dyn GpuFuture>>>>>;
+// type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<JoinFuture<FenceSignalFuture<SwapchainAcquireFuture>, Box<dyn GpuFuture>>>>>;
+// type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<Box<dyn GpuFuture>>>>;
+type InFlightFrameFuture = FenceSignalFuture<PresentFuture<CommandBufferExecFuture<JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture>>>>;
 
 pub struct SwapchainInfo {
     swapchain: Option<Arc<Swapchain>>,
@@ -97,7 +100,7 @@ pub struct SwapchainInfo {
     // command_buffers: Vec<Arc<CommandBuffer>>,
     acquire_future: Option<SwapchainAcquireFuture>,
     // in_flight_frames: Vec<Box<dyn GpuFuture>>,
-    in_flight_frames: Vec<Option<Box<InFlightFrameFuture>>>,
+    in_flight_frames: Vec<Option<Arc<InFlightFrameFuture>>>,
     // acquire_futures: Vec<Option<SwapchainAcquireFuture>>,
     current_image_idx: u32,
     prev_image_idx: u32,
@@ -127,8 +130,8 @@ impl SwapchainInfo {
 #[allow(clippy::enum_variant_names)]
 pub enum SwapchainBufferMode {
     SingleBuffer,
-    #[default]
     DoubleBuffer,
+    #[default]
     TripleBuffer,
 }
 
@@ -374,8 +377,8 @@ impl GraphicsManager {
             swapchain_image_sampled,
             swapchain_info,
             render_pass: None,
-            max_concurrent_frames: 12,
-            current_frame_index: 0,
+            // max_concurrent_frames: 3,
+            // current_frame_index: 0,
             state: Default::default(),
             debug_pipeline_statistics: None,
             current_timestamp_query_index: 0,
@@ -390,10 +393,10 @@ impl GraphicsManager {
     pub fn init(&mut self) -> Result<()> {
         self.state.first_frame = true;
 
-        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
-            // sync::now(self.device.clone())
-            None
-        });
+        // self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
+        //     // sync::now(self.device.clone())
+        //     None
+        // });
 
         Ok(())
     }
@@ -1012,10 +1015,10 @@ impl GraphicsManager {
         // self.swapchain_info.acquire_futures.clear();
         self.swapchain_info.acquire_future = None;
         self.swapchain_info.in_flight_frames.clear();
-        self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
-            // sync::now(self.device.clone())
-            None
-        });
+        // self.swapchain_info.in_flight_frames.resize_with(self.max_concurrent_frames, || {
+        //     // sync::now(self.device.clone())
+        //     None
+        // });
 
         // self.swapchain_info.command_buffers.clear();
         // for i in 0..self.max_concurrent_frames {
@@ -1088,6 +1091,11 @@ impl GraphicsManager {
         let (swapchain, images) = Swapchain::new(self.device.clone(), self.surface.clone(), create_info)
             .inspect_err(|err| error!("Failed to create Vulkan swapchain: {err}"))?;
 
+        self.swapchain_info.in_flight_frames.resize_with(images.len(), || {
+            // sync::now(self.device.clone())
+            None
+        });
+
         self.swapchain_info.swapchain = Some(swapchain);
         self.swapchain_info.images = images;
         self.state.swapchain_recreated = true;
@@ -1154,9 +1162,9 @@ impl GraphicsManager {
             }
             Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to acquire next image for begin_frame"))
         };
-        
+
         // Wait for the current frame future to be finished before beginning the next frame
-        if let Some(future) = &mut self.swapchain_info.in_flight_frames[self.current_frame_index] {
+        if let Some(future) = &mut self.swapchain_info.in_flight_frames[image_index as usize] {
             future.cleanup_finished();
             future.wait(None).expect("Failed to wait on GPU Fence future");
         }
@@ -1164,13 +1172,8 @@ impl GraphicsManager {
         // This SHIT fucking code does not work... I hate it...
         // We are waiting on the //previous// frame, not the current one, so the CPU will block until the previous frame is done.
         // The ring buffer is completely fucking pointless here... aghhh
-        
 
-        // Increment the ring buffer for this frame
-        self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
-        // info!("begin_frame for next frame {}, image index {} -> {}", self.current_frame_index, self.swapchain_info.current_image_idx, image_index);
-        
-        
+
         if is_suboptimal {
             // Swapchain will be recreated next time
             self.request_recreate_swapchain();
@@ -1211,33 +1214,32 @@ impl GraphicsManager {
 
         // Finalize the command buffer
         let cmd_buf = cmd_buf.build()?;
-        
+
         let swapchain = self.swapchain()?.clone();
         let image_index = self.swapchain_info.current_image_idx;
         let acquire_future = self.swapchain_info.acquire_future.take().unwrap();
 
-        // let prev_frame_index = (self.current_frame_index + self.max_concurrent_frames - 1) % self.max_concurrent_frames;
-        // let prev_frame_end = if let Some(prev_frame) = self.swapchain_info.in_flight_frames[prev_frame_index].take() {
-        //     prev_frame as Box<dyn GpuFuture>
-        // } else {
-        //     self.sync_now()
-        // };
-        
+        let prev_frame_index = self.swapchain_info.prev_image_idx as usize;
+        let prev_frame_end = match self.swapchain_info.in_flight_frames[prev_frame_index].clone() {
+            None => self.sync_now(),
+            Some(fence) => fence.boxed()
+        };
+
         let queue = self.queues.get(QueueId::GraphicsMain.name())
             .ok_or_else(|| anyhow!("Failed to get the GRAPHICS queue \"{}\"", QueueId::GraphicsMain.name()))?;
 
         let present_info = SwapchainPresentInfo::swapchain_image_index(swapchain, image_index);
 
         // We join on the previous frame end future for the current frame
-        let future = acquire_future
-            // .join(prev_frame_end)
+        let future = prev_frame_end
+            .join(acquire_future)
             .then_execute(queue.clone(), cmd_buf)?
             .then_swapchain_present(queue.clone(), present_info)
             .then_signal_fence_and_flush();
 
         let future = match future {
             Ok(future) => {
-                Some(Box::new(future))
+                Some(Arc::new(future))
             }
             Err(Validated::Error(VulkanError::OutOfDate)) => {
                 self.request_recreate_swapchain();
@@ -1251,8 +1253,14 @@ impl GraphicsManager {
 
         self.read_frame_stats_query_results()?;
 
+        let current_frame_index = self.swapchain_info.current_image_idx as usize;
+
         // Store the current present future in the ring buffer
-        self.swapchain_info.in_flight_frames[self.current_frame_index] = future;
+        self.swapchain_info.in_flight_frames[current_frame_index] = future;
+
+        // // Increment the ring buffer for the next
+        // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
+        // // info!("begin_frame for next frame {}, image index {} -> {}", self.current_frame_index, self.swapchain_info.current_image_idx, image_index);
 
         Ok(true)
     }
@@ -1369,7 +1377,8 @@ impl GraphicsManager {
     }
 
     pub fn sync_now(&self) -> Box<dyn GpuFuture> {
-        Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
+        sync::now(self.device.clone()).boxed()
+        // Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>
     }
 
     fn swapchain(&self) -> Result<&Arc<Swapchain>> {
@@ -1517,11 +1526,13 @@ impl GraphicsManager {
     }
 
     pub fn max_concurrent_frames(&self) -> usize {
-        self.max_concurrent_frames
+        // self.max_concurrent_frames
+        self.swapchain_info.images.len()
     }
 
     pub fn current_frame_index(&self) -> usize {
-        self.current_frame_index
+        // self.current_frame_index
+        self.swapchain_info.current_image_idx as usize
     }
 
     // pub fn get_current_graphics_cmd_buffer(&self) -> &Arc<CommandBuffer> {

@@ -197,6 +197,11 @@ impl SceneRenderer {
 
 
     pub fn init(&mut self, engine: &mut Engine) -> Result<()> {
+        Ok(())
+    }
+    
+    fn init_resources(&mut self, engine: &mut Engine) -> Result<()> {
+
         let memory_allocator = engine.graphics.memory_allocator();
 
         self.resources.resize_with(engine.graphics.max_concurrent_frames(), || {
@@ -211,7 +216,6 @@ impl SceneRenderer {
                 static_scene_changed: false,
             }
         });
-
 
         for resource in &mut self.resources {
 
@@ -231,6 +235,7 @@ impl SceneRenderer {
             resource.buffer_camera_uniforms = Some(uniform_buffer_camera);
 
         }
+        
         Ok(())
     }
 
@@ -260,7 +265,7 @@ impl SceneRenderer {
         self.update_buffer_capacity();
 
         let resource = &mut self.resources[frame_index];
-        
+
         Self::map_object_data_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
         Self::map_object_indices_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
 
@@ -556,6 +561,8 @@ impl SceneRenderer {
         debug!("SceneRenderer - Recreate swapchain");
         self.create_main_graphics_pipeline(engine)?;
 
+        self.init_resources(engine)?;
+        
         for resource in self.resources.iter_mut() {
             resource.recreate_descriptor_sets = true;
         }

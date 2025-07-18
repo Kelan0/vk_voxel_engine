@@ -95,7 +95,7 @@ impl<'a> Ticker<'a> {
             last_tick: now,
             last_dbg: now,
             tick_start_time: now,
-            debug_interval: 5.0,
+            debug_interval: 1.0,
             desired_tick_rate,
             auto_stop,
             measured_tick_rate: 0.0,

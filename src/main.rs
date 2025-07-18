@@ -245,9 +245,9 @@ impl App for TestGame {
         if window.input().key_pressed(Key::F1) {
             engine.scene_renderer.set_wireframe_mode(
                 match engine.scene_renderer.wireframe_mode() {
-                    WireframeMode::Solid => WireframeMode::Wire,
-                    WireframeMode::Wire => WireframeMode::Both,
-                    WireframeMode::Both => WireframeMode::Solid,
+                    WireframeMode::Solid => WireframeMode::Both,
+                    WireframeMode::Both => WireframeMode::Wire,
+                    WireframeMode::Wire => WireframeMode::Solid,
                 },
             );
 
