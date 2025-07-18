@@ -12,6 +12,7 @@ fn main() {
     copy_file(SDL_DLL_PATH, target_dir.to_str().unwrap(), "dll");
 
     println!("cargo::rustc-link-search={SDL_LIB_DIR}");
+    // println!("cargo:rustc-env=RUSTFLAGS=--cfg ");
 }
 
 fn copy_file(source_file: &str, target_dir: &str, extension_type: &str) -> bool {

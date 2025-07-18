@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform};
+use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition};
 use anyhow::anyhow;
 use anyhow::Result;
 use foldhash::HashMap;
@@ -12,43 +12,85 @@ use std::mem;
 use std::sync::Arc;
 use bevy_ecs::component::Component;
 use bevy_ecs::entity::Entity;
-use bevy_ecs::error::info;
 use bevy_ecs::prelude::Added;
 use bevy_ecs::query::With;
-use bevy_ecs::system::command::insert_batch;
 use glam::Vec3;
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, RawBuffer, Subbuffer};
+use rayon::slice::ParallelSliceMut;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
-use vulkano::pipeline::graphics::rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState};
+use vulkano::pipeline::graphics::rasterization::{CullMode, DepthBiasState, FrontFace, PolygonMode, RasterizationState};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
-use vulkano::memory::MappedMemoryRange;
 use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 
 #[derive(BufferContents, Vertex, Clone, PartialEq)]
 #[repr(C)]
 pub struct BaseVertex {
-    #[format(R32G32_SFLOAT)]
-    pub position: [f32; 2],
+    #[format(R32G32B32_SFLOAT)]
+    pub position: [f32; 3],
+    #[format(R32G32B32_SFLOAT)]
+    pub normal: [f32; 3],
     #[format(R32G32B32_SFLOAT)]
     pub colour: [f32; 3],
 }
 
 impl BaseVertex {
-    pub fn new(position: Vec3, colour: Vec3) -> Self {
+    pub fn new(position: Vec3, normal: Vec3, colour: Vec3) -> Self {
         BaseVertex {
-            position: [ position.x, position.y ],
+            position: [ position.x, position.y, position.z ],
+            normal: [ normal.x, normal.y, normal.z ],
             colour: [ colour.x, colour.y, colour.z ]
         }
     }
 }
+
+impl Default for BaseVertex {
+    fn default() -> Self {
+        BaseVertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            colour: [1.0; 3],
+        }
+    }
+}
+
+impl VertexHasPosition<f32> for BaseVertex {
+    fn position(&self) -> &[f32; 3] {
+        &self.position
+    }
+
+    fn set_position(&mut self, pos: [f32; 3]) {
+        self.position = pos;
+    }
+}
+
+impl VertexHasNormal<f32> for BaseVertex {
+    fn normal(&self) -> &[f32; 3] {
+        &self.normal
+    }
+
+    fn set_normal(&mut self, normal: [f32; 3]) {
+        self.normal = normal
+    }
+}
+
+impl VertexHasColour<f32> for BaseVertex {
+    fn colour(&self) -> &[f32; 3] {
+        &self.colour
+    }
+
+    fn set_colour(&mut self, colour: [f32; 3]) {
+        self.colour = colour;
+    }
+}
+
 
 #[derive(BufferContents, Clone, Copy, Default)]
 #[repr(C)]
@@ -111,6 +153,7 @@ struct FrameResource {
     descriptor_set_world: Option<Arc<DescriptorSet>>,
     descriptor_writes_world: Vec<WriteDescriptorSet>,
     recreate_descriptor_sets: bool,
+    static_scene_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +208,7 @@ impl SceneRenderer {
                 descriptor_set_world: None,
                 descriptor_writes_world: vec![],
                 recreate_descriptor_sets: true,
+                static_scene_changed: false,
             }
         });
 
@@ -193,7 +237,7 @@ impl SceneRenderer {
     pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
 
         self.static_scene_changed = false;
-        
+
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;
         }
@@ -209,13 +253,14 @@ impl SceneRenderer {
         }
 
         self.check_changed_entities(&mut engine.scene);
-        
+
         self.prepare_static_scene(&mut engine.scene);
         self.prepare_dynamic_scene(&mut engine.scene);
-        
+
         self.update_buffer_capacity();
 
         let resource = &mut self.resources[frame_index];
+        
         Self::map_object_data_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
         Self::map_object_indices_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
 
@@ -266,7 +311,7 @@ impl SceneRenderer {
             cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.clone())?;
             self.draw_scene(cmd_buf, &mut engine.scene)?;
         }
-        
+
         Ok(())
     }
 
@@ -276,19 +321,22 @@ impl SceneRenderer {
         let mut dynamic_batch = vec![];
 
         let mut query_added = scene.world.query_filtered::<(Entity, &mut RenderComponent<BaseVertex>), Added<RenderComponent<BaseVertex>>>();
-        
-        for (entity, render_component) in query_added.iter(&scene.world) {
+
+        let a = query_added.iter(&scene.world).for_each(|(entity, render_component)| {
 
             match render_component.render_type {
                 RenderType::Static => static_batch.push((entity, StaticRenderComponentMarker{})),
                 RenderType::Dynamic => dynamic_batch.push((entity, DynamicRenderComponentMarker{}))
             };
-        }
+        });
 
         if static_batch.len() > 0 {
             debug!("{} Static RenderComponent entities were added - change tick: {:?} to {:?}", static_batch.len(), scene.world.last_change_tick(), scene.world.change_tick());
             scene.world.insert_batch(static_batch);
             self.static_scene_changed = true;
+            for resource in &mut self.resources {
+                resource.static_scene_changed = true;
+            }
         }
 
         if dynamic_batch.len() > 0 {
@@ -306,11 +354,11 @@ impl SceneRenderer {
         if !self.static_scene_changed {
             return; // Do nothing.
         }
-        
+
         let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<StaticRenderComponentMarker>>();
-        
+
         let start_index = 0;
-        
+
         self.render_info.clear();
         self.object_data.clear();
         self.object_indices.clear();
@@ -320,7 +368,7 @@ impl SceneRenderer {
         // let iter = query.par_iter(&scene.world);
 
         // TODO: par_iter
-        for (render_component, transform) in query.iter(&scene.world) {
+        query.iter(&scene.world).for_each(|(render_component, transform)| {
 
             let mut object_data = ObjectDataUBO::default();
             Self::update_object_date_transform(transform, &mut object_data);
@@ -333,9 +381,9 @@ impl SceneRenderer {
             self.object_data.push(object_data);
             self.object_indices.push(ObjectIndexUBO{ index });
             index += 1;
-        }
+        });
 
-        self.object_indices[start_index..].sort_by(|lhs_idx, rhs_idx| {
+        self.object_indices[start_index..].par_sort_unstable_by(|lhs_idx, rhs_idx| {
             let lhs = &self.render_info[lhs_idx.index as usize];
             let rhs = &self.render_info[rhs_idx.index as usize];
 
@@ -344,23 +392,21 @@ impl SceneRenderer {
 
         self.static_object_count = index;
     }
-    
+
     fn prepare_dynamic_scene(&mut self, scene: &mut Scene) {
 
         let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<DynamicRenderComponentMarker>>();
 
         let start_index = self.static_object_count as usize;
-        
+
         self.render_info.truncate(start_index);
         self.object_data.truncate(start_index);
         self.object_indices.truncate(start_index);
 
         let mut index: u32 = self.static_object_count;
 
-        // let iter = query.par_iter(&scene.world);
-
         // TODO: par_iter
-        for (render_component, transform) in query.iter(&scene.world) {
+        query.iter(&scene.world).for_each(|(render_component, transform)| {
 
             let mut object_data = ObjectDataUBO::default();
             Self::update_object_date_transform(transform, &mut object_data);
@@ -373,21 +419,21 @@ impl SceneRenderer {
             self.object_data.push(object_data);
             self.object_indices.push(ObjectIndexUBO{ index });
             index += 1;
-        }
+        });
 
-        self.object_indices[start_index..].sort_by(|lhs_idx, rhs_idx| {
+        self.object_indices[start_index..].par_sort_unstable_by(|lhs_idx, rhs_idx| {
             let lhs = &self.render_info[lhs_idx.index as usize];
             let rhs = &self.render_info[rhs_idx.index as usize];
 
             lhs.mesh.cmp(&rhs.mesh)
         });
-        
+
         self.dynamic_object_count = index - self.static_object_count;
     }
-    
+
     fn update_buffer_capacity(&mut self) {
         let num_objects = self.static_object_count + self.dynamic_object_count;
-        
+
         if num_objects > self.max_object_count {
             // Grow the GPU buffers by 1.5x
             // TODO: tune this value - We don't want to over-allocate memory, and we don't want to resize the buffers too often.
@@ -448,7 +494,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    pub fn update_gpu_resources(&mut self, engine: &Engine) -> Result<()>{
+    pub fn update_gpu_resources(&mut self, engine: &Engine) -> Result<()> {
 
         let frame_index = engine.graphics.current_frame_index();
         let resource = &mut self.resources[frame_index];
@@ -456,7 +502,7 @@ impl SceneRenderer {
         if !resource.descriptor_writes_world.is_empty() {
             let mut descriptor_set_world = resource.descriptor_set_world.as_mut().unwrap().clone();
             let writes = mem::take(&mut resource.descriptor_writes_world);
-            debug!("Writing world info descriptor sets: {writes:?}");
+            // debug!("Writing world info descriptor sets: {writes:?}");
 
             unsafe { descriptor_set_world.update_by_ref(writes, []) }?
 
@@ -468,15 +514,15 @@ impl SceneRenderer {
         let static_end = static_begin + static_count;
         let dynamic_begin = static_end;
         let dynamic_end = dynamic_begin + dynamic_count;
-        
+
         if static_count > 0 || dynamic_count > 0 {
-            
+
             {
                 let buffer_object_data = resource.buffer_object_data.as_mut().unwrap();
                 debug_assert!(self.object_data.len() <= buffer_object_data.len() as usize);
                 let mut writer = buffer_object_data.write()?;
 
-                if self.static_scene_changed && static_count > 0 {
+                if resource.static_scene_changed && static_count > 0 {
                     writer[static_begin..static_end].copy_from_slice(&self.object_data[static_begin..static_end]);
                 }
                 if dynamic_count > 0 {
@@ -492,7 +538,7 @@ impl SceneRenderer {
                 let mut writer = buffer_object_indices.write()?;
                 writer[..self.object_indices.len()].copy_from_slice(self.object_indices.as_slice());
 
-                if self.static_scene_changed && static_count > 0 {
+                if resource.static_scene_changed && static_count > 0 {
                     writer[static_begin..static_end].copy_from_slice(&self.object_indices[static_begin..static_end]);
                 }
                 if dynamic_count > 0 {
@@ -500,7 +546,9 @@ impl SceneRenderer {
                 }
             }
         }
-        
+
+        resource.static_scene_changed = false;
+
         Ok(())
     }
 
@@ -552,7 +600,7 @@ impl SceneRenderer {
             .set_multisample_state(MultisampleState::default())
             .set_rasterization_state(RasterizationState{
                 polygon_mode: PolygonMode::Fill,
-                cull_mode: CullMode::None,
+                cull_mode: CullMode::Back,
                 front_face: FrontFace::CounterClockwise,
                 ..Default::default()
             })
@@ -571,8 +619,14 @@ impl SceneRenderer {
             .set_rasterization_state(RasterizationState{
                 polygon_mode: PolygonMode::Line,
                 cull_mode: CullMode::None,
-                line_width: 2.0,
+                line_width: 1.0,
+                depth_bias: Some(DepthBiasState{ constant_factor: 1.0, clamp: 0.0, slope_factor: -1.0 }),
                 ..main_graphics_pipeline.rasterization_state().clone()
+            })
+            .set_depth_stencil_state(DepthStencilState{
+                depth: Some(DepthState{ write_enable: true, compare_op: CompareOp::Less }),
+                // depth_bounds: Some(0.0..=1.0),
+                ..Default::default()
             })
             .build_pipeline::<BaseVertex>(device.clone())?;
 

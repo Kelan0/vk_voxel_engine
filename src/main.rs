@@ -2,24 +2,23 @@ mod application;
 mod core;
 mod util;
 
-use std::fs;
-use std::sync::Arc;
+use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{BaseVertex, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform, UpdateComponent, WireframeMode};
+use crate::core::{BaseVertex, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform, UpdateComponent, VertexBuilder, WireframeMode};
 use anyhow::Result;
-use bevy_ecs::entity::Entity;
-use bevy_ecs::error::info;
-use bevy_ecs::observer::TriggerTargets;
 use application::ticker::Ticker;
 use application::App;
+use bevy_ecs::entity::Entity;
 use core::Engine;
-use glam::{Affine3A, DAffine3, Vec3};
+use glam::Vec3;
 use log::{debug, error, info};
 use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
+use std::fs;
+use std::sync::Arc;
+use bevy_ecs::error::debug;
 use vulkano::memory::allocator::StandardMemoryAllocator;
-use crate::application::ticker::TickProfileStatistics;
 
 struct TestGame {
     camera_pitch: f32,
@@ -52,10 +51,10 @@ impl TestGame {
     fn create_test_mesh(&mut self, allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
 
         let vertices = [
-            BaseVertex { position: [-0.5, 0.5], colour: [0.0, 1.0, 1.0] },
-            BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 1.0] },
-            BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 1.0] },
-            BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 1.0] },
+            BaseVertex { position: [-0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 1.0, 1.0] },
+            BaseVertex { position: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 1.0, 1.0] },
+            BaseVertex { position: [-0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 0.0, 1.0] },
+            BaseVertex { position: [0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 0.0, 1.0] },
         ];
 
         let indices = [0, 1, 2, 1, 3, 2];
@@ -113,12 +112,24 @@ impl App for TestGame {
 
         let allocator = engine.graphics.memory_allocator();
 
-        let mut mesh_data = MeshData::new();
-        let i0 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, -0.5, 0.0), Vec3::new(0.0, 0.0, 0.0))); // 00
-        let i1 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, 1.5, 0.0), Vec3::new(0.0, 1.0, 0.0))); // 01
-        let i2 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, 0.5, 0.0), Vec3::new(1.0, 1.0, 0.0))); // 11
-        let i3 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, -0.5, 0.0), Vec3::new(1.0, 0.0, 0.0))); // 10
-        mesh_data.add_quad(i0, i1, i2, i3);
+        let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
+
+        // mesh_data.new_vertex().pos([-0.5, -0.5, -0.5]).add();
+        
+        mesh_data.create_cuboid([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]);
+        
+        // mesh_data.create_quad(
+        //     VertexBuilder::new().pos([-0.5, -0.5, 0.0]).colour([0.0, 0.0, 0.0]).build(), // 00
+        //     VertexBuilder::new().pos([-0.5, 1.5, 0.0]).colour([0.0, 1.0, 0.0]).build(), // 01
+        //     VertexBuilder::new().pos([0.5, 0.5, 0.0]).colour([1.0, 1.0, 0.0]).build(), // 11
+        //     VertexBuilder::new().pos([0.5, -0.5, 0.0]).colour([1.0, 0.0, 0.0]).build(), // 10
+        // );
+        
+        // let i0 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, -0.5, 0.0), Vec3::new(0.0, 0.0, 0.0))); // 00
+        // let i1 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, 1.5, 0.0), Vec3::new(0.0, 1.0, 0.0))); // 01
+        // let i2 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, 0.5, 0.0), Vec3::new(1.0, 1.0, 0.0))); // 11
+        // let i3 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, -0.5, 0.0), Vec3::new(1.0, 0.0, 0.0))); // 10
+        // mesh_data.add_quad(i0, i1, i2, i3);
         
         
         // let vertices = [
@@ -146,12 +157,12 @@ impl App for TestGame {
         camera.set_position(Vec3::new(1.0, 0.0, -3.0));
 
         let num_x = 10;
-        let num_z = 10;
+        let num_z = 100;
         for i in 0..num_x {
-            let x = i as f32;
+            let x = i as f32 * 2.7;
 
             for j in 0..num_z {
-                let z = j as f32;
+                let z = j as f32 * 2.7;
 
                 engine.scene.create_entity("TestEntity1")
                     .add_component(render_component_1.clone())
@@ -162,7 +173,18 @@ impl App for TestGame {
             }
         }
 
-        self.add_test_entity(&mut engine.scene, Vec3::new(0.0, 2.0, 0.0));
+        let num_x = 10;
+        let num_z = 100;
+        for i in 0..num_x {
+            let x = i as f32;
+
+            for j in 0..num_z {
+                let z = j as f32;
+                
+                self.add_test_entity(&mut engine.scene, Vec3::new(x, 2.0, z));
+            }
+        }
+
         Ok(())
     }
 
@@ -190,14 +212,19 @@ impl App for TestGame {
             camera.set_aspect_ratio(aspect_ratio);
         }
 
-        if ticker.time_since_last_dbg() >= 1.0 {
+        if ticker.time_since_last_dbg() >= ticker.debug_interval() {
 
             let stats = ticker.calculate_profiling_statistics();
 
             debug!("{stats:?}");
-            
+
             self.debug_stats.push(stats);
 
+
+
+            if let Some(stats) = engine.graphics.debug_pipeline_statistics() {
+                debug!("{:?}", stats);
+            }
         }
 
         Ok(())

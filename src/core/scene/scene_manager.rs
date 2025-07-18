@@ -61,11 +61,16 @@ impl Scene {
         self.world.clear_trackers();
 
         let mut query = self.world.query::<(bevy_ecs::entity::Entity, &mut UpdateComponent)>();
-        
-        for (entity, update_component) in query.iter(&self.world) {
+
+        query.iter(&self.world).for_each(|(entity, update_component)| {
             let on_render = &update_component.on_render;
             on_render(entity, ticker, engine);
-        }
+        });
+        
+        // for (entity, update_component) in query.iter(&self.world) {
+        //     let on_render = &update_component.on_render;
+        //     on_render(entity, ticker, engine);
+        // }
         
         Ok(())
     }

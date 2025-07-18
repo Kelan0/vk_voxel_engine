@@ -30,8 +30,9 @@ layout(std140, set = 1, binding = 1) readonly buffer ObjectIndexBuffer {
     uvec4 objectIndices[];
 };
 
-layout(location = 0) in vec2 position;
-layout(location = 1) in vec3 colour;
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec3 colour;
 
 layout(location = 0) out vec3 fs_colour;
 
@@ -40,9 +41,9 @@ void main() {
 
     mat4 modelMatrix = objects[objectIndex].modelMatrix;
 
-    fs_colour = vec3(colour);
+    fs_colour = vec3(normalize(normal) * 0.5 + 0.5);
 
-    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(position, 0.0, 1.0);
+    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(position, 1.0);
 }
 #endif
 

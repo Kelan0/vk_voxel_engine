@@ -144,7 +144,7 @@ impl Engine {
         ticker: &mut Ticker,
         cmd_buf: &mut PrimaryCommandBuffer,
     ) -> Result<()> {
-        if ticker.time_since_last_dbg() >= 1.0 {
+        if ticker.time_since_last_dbg() >= ticker.debug_interval() {
             self.graphics.debug_print_ref_counts();
         }
 
@@ -154,9 +154,9 @@ impl Engine {
         unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
-        
+
         unsafe { self.scene.pre_render(ticker, &mut *self_ptr) }?;
-        
+
         Ok(())
     }
 
@@ -185,7 +185,7 @@ impl Engine {
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
-        
+
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 
         Ok(())

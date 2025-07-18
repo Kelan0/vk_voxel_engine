@@ -21,6 +21,7 @@ pub struct Ticker<'a> {
     last_tick: Instant,
     last_dbg: Instant,
     tick_start_time: Instant,
+    debug_interval: f64,
     auto_stop: bool, // Automatically kill the ticker if the tick_list is empty 
     desired_tick_rate: f64,
     measured_tick_rate: f64,
@@ -94,6 +95,7 @@ impl<'a> Ticker<'a> {
             last_tick: now,
             last_dbg: now,
             tick_start_time: now,
+            debug_interval: 5.0,
             desired_tick_rate,
             auto_stop,
             measured_tick_rate: 0.0,
@@ -230,7 +232,7 @@ impl<'a> Ticker<'a> {
             // ==== HANDLE DEBUG MEASUREMENTS ====
 
             let time_since_dbg = self.time_since_last_dbg();
-            if time_since_dbg >= 1.0 {
+            if time_since_dbg >= self.debug_interval {
                 let missed_time = self.real_time - self.simulation_time;
                 self.accumulated_missed_time += missed_time - self.last_missed_time;
                 self.last_missed_time = missed_time;
@@ -383,6 +385,10 @@ impl<'a> Ticker<'a> {
 
     pub fn time_since_last_dbg(&self) -> f64 {
         self.tick_start_time.duration_since(self.last_dbg).as_secs_f64()
+    }
+    
+    pub fn debug_interval(&self) -> f64 {
+        self.debug_interval
     }
 
     pub fn take_result(&mut self) -> Result<()> {
