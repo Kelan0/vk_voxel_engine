@@ -46,7 +46,7 @@ impl Engine {
         let scene = Scene::new()
             .inspect_err(|_| error!("Failed to create Scene"))?;
 
-        let scene_renderer = SceneRenderer::new()
+        let scene_renderer = SceneRenderer::new(&graphics)
             .inspect_err(|_| error!("Failed to create SceneRenderer"))?;
         
         // let user_app = Some(user_app);

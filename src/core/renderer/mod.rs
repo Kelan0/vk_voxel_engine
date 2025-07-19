@@ -7,6 +7,8 @@ mod scene_renderer;
 mod render_pass;
 mod render_component;
 mod mesh_data;
+mod texture;
+mod material;
 
 pub use graphics_manager::GraphicsManager;
 
@@ -18,3 +20,5 @@ pub(crate) use render_component::*;
 pub(crate) use mesh::*;
 pub(crate) use mesh_data::*;
 pub(crate) use camera::*;
+pub(crate) use texture::*;
+pub(crate) use material::*;

@@ -12,10 +12,11 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::Read;
+use std::mem;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, SecondaryAutoCommandBuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SecondaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags};
@@ -24,22 +25,25 @@ use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
-use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
-use vulkano::memory::MemoryHeapFlags;
+use vulkano::memory::allocator::{AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryAllocator, MemoryTypeFilter};
+use vulkano::memory::{MemoryHeapFlags, MemoryPropertyFlags};
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::query::{QueryControlFlags, QueryPipelineStatisticFlags, QueryPool, QueryPoolCreateInfo, QueryResultFlags, QueryType};
 use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency, SubpassDescription};
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
-use vulkano::sync::future::{FenceSignalFuture, JoinFuture};
-use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
+use vulkano::sync::future::{FenceSignalFuture, JoinFuture, NowFuture};
+use vulkano::sync::{AccessFlags, GpuFuture, ImageMemoryBarrier, PipelineStage, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
+use vulkano::buffer::{AllocateBufferError, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
-pub type PrimaryCommandBuffer = AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
-pub type SecondaryCommandBuffer = AutoCommandBufferBuilder<SecondaryAutoCommandBuffer>;
+pub type CommandBuffer<L> = AutoCommandBufferBuilder<L>;
+pub type PrimaryCommandBuffer = CommandBuffer<PrimaryAutoCommandBuffer>;
+pub type SecondaryCommandBuffer = CommandBuffer<SecondaryAutoCommandBuffer>;
 
+pub type StandardMemoryAllocator = GenericMemoryAllocator<FreeListAllocator>;
 
 type QueueMap = HashMap<&'static str, Arc<Queue>>;
 
@@ -307,6 +311,7 @@ impl GraphicsManager {
             shader_storage_buffer_array_dynamic_indexing: true,
             wide_lines: true,
             pipeline_statistics_query: true,
+            runtime_descriptor_array: true,
             // smooth_lines: true,
             // bresenham_lines: true,
             ..Default::default()
@@ -1225,7 +1230,7 @@ impl GraphicsManager {
             Some(fence) => fence.boxed()
         };
 
-        let queue = self.queues.get(QueueId::GraphicsMain.name())
+        let queue = self.queue(QueueId::GraphicsMain.name())
             .ok_or_else(|| anyhow!("Failed to get the GRAPHICS queue \"{}\"", QueueId::GraphicsMain.name()))?;
 
         let present_info = SwapchainPresentInfo::swapchain_image_index(swapchain, image_index);
@@ -1437,6 +1442,115 @@ impl GraphicsManager {
         self.load_shader_module_from_source(source.as_str(), path, entry_point_name, kind, options)
     }
 
+    pub fn create_staging_subbuffer<T: BufferContents>(&self, len: DeviceSize) -> Result<Subbuffer<[T]>> {
+
+        let allocator = self.memory_allocator();
+
+        let buffer_create_info = BufferCreateInfo{
+            usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        };
+
+        let allocation_info = AllocationCreateInfo{
+            // memory_type_filter: MemoryTypeFilter{
+            //     required_flags: MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT,
+            //     preferred_flags: MemoryPropertyFlags::empty(),
+            //     not_preferred_flags: MemoryPropertyFlags::DEVICE_LOCAL | MemoryPropertyFlags::HOST_CACHED,
+            // },
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        };
+
+        let buffer = Buffer::new_slice::<T>(allocator.clone(), buffer_create_info, allocation_info, len)?;
+        Ok(buffer)
+    }
+
+    pub fn create_readback_subbuffer<T: BufferContents>(&self, len: DeviceSize) -> Result<Subbuffer<[T]>> {
+
+        let allocator = self.memory_allocator();
+
+        let buffer_create_info = BufferCreateInfo{
+            usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        };
+
+        let allocation_info = AllocationCreateInfo{
+            // memory_type_filter: MemoryTypeFilter{
+            //     required_flags: MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT,
+            //     preferred_flags: MemoryPropertyFlags::empty(),
+            //     not_preferred_flags: MemoryPropertyFlags::DEVICE_LOCAL | MemoryPropertyFlags::HOST_CACHED,
+            // },
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        };
+
+        let buffer = Buffer::new_slice::<T>(allocator.clone(), buffer_create_info, allocation_info, len)?;
+        Ok(buffer)
+    }
+
+    pub fn upload_buffer_data_iter<T, I>(buffer: Subbuffer<[T]>, iter: I) -> Result<()>
+    where
+        T: BufferContents,
+        I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator{
+
+        let mut write = buffer.write()?;
+
+        for (o, i) in write.iter_mut().zip(iter) {
+            *o = i;
+        }
+
+        Ok(())
+    }
+
+    pub fn upload_buffer_data_sized<T>(buffer: Subbuffer<[T]>, data: &[T]) -> Result<()>
+    where
+        T: BufferContents + Sized + Clone,
+    {
+        let mut write = buffer.write()?;
+
+        write[0..data.len()].clone_from_slice(data);
+        // data.clone_into(&mut &*write);
+
+        Ok(())
+    }
+
+    pub fn upload_buffer_data_unsized<T>(buffer: Subbuffer<T>, data: &T) -> Result<()>
+    where
+        T: BufferContents + ?Sized,
+    {
+        let write = buffer.write()?;
+        data.clone_into(&mut &*write);
+
+        Ok(())
+    }
+    
+    pub fn begin_transfer_commands(&self) -> Result<PrimaryCommandBuffer>{
+        let allocator = self.command_buffer_allocator();
+        let queue_family_index = self.queue_details.transfer_queue_family_index.unwrap();
+        let cmd_buf = AutoCommandBufferBuilder::primary(allocator, queue_family_index, CommandBufferUsage::OneTimeSubmit)?;
+        Ok(cmd_buf)
+    }
+    
+    pub fn submit_transfer_commands(&self, cmd_buf: PrimaryCommandBuffer) -> Result<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> {
+        let cmd_buf = cmd_buf.build()?;
+
+        let queue = self.transfer_queue();
+        
+        let fence = cmd_buf.execute(queue)?
+            .then_signal_fence_and_flush()?;
+        
+        Ok(fence)
+    }
+    
+    pub fn transition_image_layout<L>(cmd_buf: PrimaryCommandBuffer, image: Arc<Image>) {
+        // ImageLayout::ShaderReadOnlyOptimal;
+        // let barrier = ImageMemoryBarrier{
+        //     
+        // };
+    }
+
+
     pub fn render_pass(&self) -> Arc<RenderPass> {
         self.render_pass.as_ref().unwrap().clone()
     }
@@ -1461,6 +1575,17 @@ impl GraphicsManager {
     // pub fn get_graphics_command_pool_mut(&mut self) -> &mut CommandPool {
     //     self.get_command_pool_mut(self.queue_details.graphics_queue_family_index.unwrap()).unwrap()
     // }
+    
+    pub fn queue(&self, queue_id: &'static str) -> Option<&Arc<Queue>> {
+        self.queues.get(queue_id)
+    }
+    
+    pub fn graphics_queue(&self) -> Arc<Queue> {
+        self.queue(QueueId::GraphicsMain.name()).unwrap().clone()
+    }
+    pub fn transfer_queue(&self) -> Arc<Queue> {
+        self.queue(QueueId::TransferMain.name()).unwrap().clone()
+    }
 
     pub fn request_recreate_swapchain(&mut self) {
         if self.update_swapchain_request.is_none() {

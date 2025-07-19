@@ -5,7 +5,7 @@ mod util;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{BaseVertex, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform, UpdateComponent, VertexBuilder, WireframeMode};
+use crate::core::{BaseVertex, Material, Mesh, MeshConfiguration, MeshData, PixelData, PixelDataFormat, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -17,8 +17,7 @@ use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
 use std::fs;
 use std::sync::Arc;
-use bevy_ecs::error::debug;
-use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::image::{ImageLayout, ImageUsage};
 
 struct TestGame {
     camera_pitch: f32,
@@ -51,10 +50,10 @@ impl TestGame {
     fn create_test_mesh(&mut self, allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
 
         let vertices = [
-            BaseVertex { position: [-0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 1.0, 1.0] },
-            BaseVertex { position: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 1.0, 1.0] },
-            BaseVertex { position: [-0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 0.0, 1.0] },
-            BaseVertex { position: [0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 0.0, 1.0] },
+            BaseVertex { position: [-0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 1.0, 1.0], texture: [0.0, 1.0] },
+            BaseVertex { position: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 1.0, 1.0], texture: [1.0, 1.0] },
+            BaseVertex { position: [-0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 0.0, 1.0], texture: [0.0, 0.0] },
+            BaseVertex { position: [0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 0.0, 1.0], texture: [1.0, 0.0] },
         ];
 
         let indices = [0, 1, 2, 1, 3, 2];
@@ -72,7 +71,7 @@ impl TestGame {
 
         let mesh2 = self.test_mesh.as_ref().unwrap();
 
-        let render_component = RenderComponent::new(mesh2.clone(), RenderType::Dynamic);
+        let render_component = RenderComponent::new(RenderType::Dynamic, mesh2.clone());
 
         scene.create_entity("TestEntity2")
             .add_component(render_component)
@@ -111,44 +110,26 @@ impl App for TestGame {
         window.set_visible(true);
 
         let allocator = engine.graphics.memory_allocator();
+        
+        let sampler = Texture::create_default_sampler(engine.graphics.device())?;
+        
+        let buffer = engine.graphics.create_staging_subbuffer::<u8>(512 * 512 * 4)?;
 
+        let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
+        let image = Texture::load_image_from_file_staged(&mut cmd_buf, allocator.clone(), buffer.clone(), "res/textures/blocks/grass_side_carried.png", ImageUsage::SAMPLED)?;
+        let image_view = Texture::create_image_view_from_image(image)?;
+        let texture = Texture::new(image_view, sampler);
+        engine.graphics.submit_transfer_commands(cmd_buf)?
+            .wait(None)?;
+        
         let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
-
-        // mesh_data.new_vertex().pos([-0.5, -0.5, -0.5]).add();
+        mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]);
+        let mesh1 = Arc::new(mesh_data.build_mesh(allocator.clone())?);
         
-        mesh_data.create_cuboid([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]);
+        let render_component_1 = RenderComponent::new(RenderType::Static, mesh1)
+            .with_material(Some(Material::new(texture)));
         
-        // mesh_data.create_quad(
-        //     VertexBuilder::new().pos([-0.5, -0.5, 0.0]).colour([0.0, 0.0, 0.0]).build(), // 00
-        //     VertexBuilder::new().pos([-0.5, 1.5, 0.0]).colour([0.0, 1.0, 0.0]).build(), // 01
-        //     VertexBuilder::new().pos([0.5, 0.5, 0.0]).colour([1.0, 1.0, 0.0]).build(), // 11
-        //     VertexBuilder::new().pos([0.5, -0.5, 0.0]).colour([1.0, 0.0, 0.0]).build(), // 10
-        // );
-        
-        // let i0 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, -0.5, 0.0), Vec3::new(0.0, 0.0, 0.0))); // 00
-        // let i1 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(-0.5, 1.5, 0.0), Vec3::new(0.0, 1.0, 0.0))); // 01
-        // let i2 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, 0.5, 0.0), Vec3::new(1.0, 1.0, 0.0))); // 11
-        // let i3 = mesh_data.add_vertex(BaseVertex::new(Vec3::new(0.5, -0.5, 0.0), Vec3::new(1.0, 0.0, 0.0))); // 10
-        // mesh_data.add_quad(i0, i1, i2, i3);
-        
-        
-        // let vertices = [
-        //     BaseVertex { position: [-0.5, 1.5], colour: [0.0, 1.0, 0.0] },
-        //     BaseVertex { position: [0.5, 0.5], colour: [1.0, 1.0, 0.0] },
-        //     BaseVertex { position: [-0.5, -0.5], colour: [0.0, 0.0, 0.0] },
-        //     BaseVertex { position: [0.5, -0.5], colour: [1.0, 0.0, 0.0] },
-        // ];
-        // 
-        // let indices = [0, 1, 2, 1, 3, 2];
-
-        let mesh1 = Arc::new(Mesh::new(allocator.clone(), MeshConfiguration {
-            vertices: Vec::from(mesh_data.vertices),
-            indices: Some(Vec::from(mesh_data.indices)),
-        })?);
-
         self.create_test_mesh(allocator.clone())?;
-
-        let render_component_1 = RenderComponent::new(mesh1, RenderType::Static);
 
         // engine.scene_renderer.add_mesh(mesh);
 

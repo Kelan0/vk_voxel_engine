@@ -3,7 +3,7 @@ use crate::core::{Engine, PrimaryCommandBuffer};
 use anyhow::Result;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, GenericMemoryAllocator, MemoryAllocator, MemoryTypeFilter, Suballocator};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 
 pub struct MeshConfiguration<V: Vertex> {
@@ -41,7 +41,7 @@ impl<V: Vertex> Ord for Mesh<V> {
 
 
 impl <V: Vertex> Mesh<V> {
-    pub fn new(allocator: Arc<StandardMemoryAllocator>, config: MeshConfiguration<V>) -> Result<Self> {
+    pub fn new(allocator: Arc<dyn MemoryAllocator>, config: MeshConfiguration<V>) -> Result<Self> {
 
         let buffer_create_info = BufferCreateInfo{
             usage: BufferUsage::VERTEX_BUFFER,
@@ -82,6 +82,10 @@ impl <V: Vertex> Mesh<V> {
 
         Ok(mesh)
     }
+
+    pub fn resource_id(&self) -> u64 {
+        self.resource_id
+    }
     
     pub fn draw(&self, cmd_buf: &mut PrimaryCommandBuffer, instance_count: u32, first_instance: u32) -> Result<()> {
 
@@ -95,10 +99,6 @@ impl <V: Vertex> Mesh<V> {
         }
         
         Ok(())
-    }
-    
-    pub fn get_resource_id(&self) -> u64 {
-        self.resource_id
     }
 }
 

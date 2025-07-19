@@ -1,25 +1,32 @@
 use crate::application::Ticker;
-use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition};
+use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use anyhow::anyhow;
 use anyhow::Result;
+use bevy_ecs::component::Component;
+use bevy_ecs::entity::Entity;
+use bevy_ecs::prelude::Added;
+use bevy_ecs::query::With;
 use foldhash::HashMap;
+use glam::{Vec2, Vec3};
 use log::{debug, error, info};
+use rayon::slice::ParallelSliceMut;
 use shaderc::{CompileOptions, ShaderKind};
 use shrev::ReaderId;
 use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
-use bevy_ecs::component::Component;
-use bevy_ecs::entity::Entity;
-use bevy_ecs::prelude::Added;
-use bevy_ecs::query::With;
-use glam::Vec3;
-use rayon::slice::ParallelSliceMut;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{CopyBufferInfo, CopyImageToBufferInfo};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::device::Device;
+use vulkano::format::Format;
+use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, LOD_CLAMP_NONE};
+use vulkano::image::view::{ImageView, ImageViewCreateInfo};
+use vulkano::image::{Image, ImageCreateFlags, ImageCreateInfo, ImageLayout, ImageTiling, ImageType, ImageUsage, SampleCount};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
+use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, DepthBiasState, FrontFace, PolygonMode, RasterizationState};
@@ -28,7 +35,6 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
-use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 
 #[derive(BufferContents, Vertex, Clone, PartialEq)]
 #[repr(C)]
@@ -39,14 +45,17 @@ pub struct BaseVertex {
     pub normal: [f32; 3],
     #[format(R32G32B32_SFLOAT)]
     pub colour: [f32; 3],
+    #[format(R32G32_SFLOAT)]
+    pub texture: [f32; 2],
 }
 
 impl BaseVertex {
-    pub fn new(position: Vec3, normal: Vec3, colour: Vec3) -> Self {
+    pub fn new(position: Vec3, normal: Vec3, colour: Vec3, texture: Vec2) -> Self {
         BaseVertex {
             position: [ position.x, position.y, position.z ],
             normal: [ normal.x, normal.y, normal.z ],
-            colour: [ colour.x, colour.y, colour.z ]
+            colour: [ colour.x, colour.y, colour.z ],
+            texture: [ texture.x, texture.y ]
         }
     }
 }
@@ -57,6 +66,7 @@ impl Default for BaseVertex {
             position: [0.0; 3],
             normal: [0.0; 3],
             colour: [1.0; 3],
+            texture: [0.0; 2],
         }
     }
 }
@@ -91,21 +101,37 @@ impl VertexHasColour<f32> for BaseVertex {
     }
 }
 
+impl VertexHasTexture<f32> for BaseVertex {
+    fn texture(&self) -> &[f32; 2] {
+        &self.texture
+    }
+
+    fn set_texture(&mut self, texture: [f32; 2]) {
+        self.texture = texture;
+    }
+}
+
 
 #[derive(BufferContents, Clone, Copy, Default)]
 #[repr(C)]
 struct ObjectDataUBO {
-    model_matrix: [f32; 16]
-    //    uint materialIndex;
-    //    uint _pad0;
-    //    uint _pad1;
-    //    uint _pad2;
+    model_matrix: [f32; 16],
+    material_index: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 #[derive(BufferContents, Clone, Copy, Default)]
 #[repr(C)]
 struct ObjectIndexUBO {
     index: u32
+}
+
+#[derive(BufferContents, Clone, Copy, Default)]
+#[repr(C)]
+struct MaterialUBO {
+    texture_index: u32
 }
 
 struct RenderInfo {
@@ -134,26 +160,43 @@ pub struct SceneRenderer {
     camera: Camera,
     // meshes: Vec<Mesh<BaseVertex>>, // temporary
 
+    textures: Vec<Texture>,
+    materials: Vec<Material>,
+    textures_map: HashMap<u64, usize>,
+    materials_map: HashMap<u64, usize>,
+    textures_changed: bool,
+    materials_changed: bool,
+
     render_info: Vec<RenderInfo>,
     object_data: Vec<ObjectDataUBO>,
     object_indices: Vec<ObjectIndexUBO>,
+    material_data: Vec<MaterialUBO>,
     static_object_count: u32,
     dynamic_object_count: u32,
     max_object_count: u32,
+    max_material_count: u32,
     static_scene_changed: bool,
 
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
+
+    null_texture: Arc<ImageView>,
+    default_sampler: Arc<Sampler>,
 }
 
 struct FrameResource {
     buffer_camera_uniforms: Option<Subbuffer<CameraDataUBO>>,
     buffer_object_data: Option<Subbuffer<[ObjectDataUBO]>>,
     buffer_object_indices: Option<Subbuffer<[ObjectIndexUBO]>>,
+    buffer_material_data: Option<Subbuffer<[MaterialUBO]>>,
     descriptor_set_camera: Option<Arc<DescriptorSet>>,
     descriptor_set_world: Option<Arc<DescriptorSet>>,
+    descriptor_set_materials: Option<Arc<DescriptorSet>>,
     descriptor_writes_world: Vec<WriteDescriptorSet>,
+    descriptor_writes_materials: Vec<WriteDescriptorSet>,
     recreate_descriptor_sets: bool,
     static_scene_changed: bool,
+    textures_changed: bool,
+    materials_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,7 +207,10 @@ pub enum WireframeMode {
 }
 
 impl SceneRenderer {
-    pub fn new() -> Result<Self> {
+    pub fn new(graphics: &GraphicsManager) -> Result<Self> {
+
+        let null_texture = Self::create_null_texture(graphics)?;
+        let default_sampler = Self::create_default_sampler(graphics.device())?;
 
         let scene_renderer = SceneRenderer{
 
@@ -174,17 +220,29 @@ impl SceneRenderer {
             wireframe_mode: WireframeMode::Solid,
             camera: Camera::new(),
 
+            textures: vec![],
+            materials: vec![],
+            textures_map: Default::default(),
+            materials_map: Default::default(),
+            textures_changed: false,
+            materials_changed: false,
             render_info: vec![],
             object_data: vec![],
             object_indices: vec![],
             // meshes: vec![],
 
+            material_data: vec![],
             static_object_count: 0,
             dynamic_object_count: 0,
             max_object_count: 100,
+            max_material_count: 100,
             static_scene_changed: false,
 
             event_recreate_swapchain: None,
+
+            null_texture,
+            default_sampler
+
         };
 
         Ok(scene_renderer)
@@ -197,6 +255,8 @@ impl SceneRenderer {
 
 
     pub fn init(&mut self, engine: &mut Engine) -> Result<()> {
+        let null_texture = Texture::new(self.null_texture.clone(), self.default_sampler.clone());
+        self.register_texture(&null_texture);
         Ok(())
     }
     
@@ -209,11 +269,16 @@ impl SceneRenderer {
                 buffer_camera_uniforms: None,
                 buffer_object_data: None,
                 buffer_object_indices: None,
+                buffer_material_data: None,
                 descriptor_set_camera: None,
                 descriptor_set_world: None,
+                descriptor_set_materials: None,
                 descriptor_writes_world: vec![],
+                descriptor_writes_materials: vec![],
                 recreate_descriptor_sets: true,
                 static_scene_changed: false,
+                textures_changed: false,
+                materials_changed: false,
             }
         });
 
@@ -262,15 +327,17 @@ impl SceneRenderer {
         self.prepare_static_scene(&mut engine.scene);
         self.prepare_dynamic_scene(&mut engine.scene);
 
-        self.update_buffer_capacity();
+        self.check_changed_materials(&mut engine.scene);
+
+        self.update_buffer_capacities();
 
         let resource = &mut self.resources[frame_index];
 
         Self::map_object_data_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
         Self::map_object_indices_buffer(resource, self.max_object_count as usize, engine.graphics.memory_allocator())?;
+        Self::map_materials_buffer(resource, self.max_material_count as usize, engine.graphics.memory_allocator())?;
 
         let r = self.update_gpu_resources(engine);
-
 
         if let Err(r) = r {
             error!("Error writing buffers for frame: {} - Error was: {}", frame_index, r);
@@ -301,10 +368,11 @@ impl SceneRenderer {
         let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
         let descriptor_set_camera = resource.descriptor_set_camera.as_ref().unwrap();
         let descriptor_set_world = resource.descriptor_set_world.as_ref().unwrap();
+        let descriptor_set_materials = resource.descriptor_set_materials.as_ref().unwrap();
         let pipeline_layout = graphics_pipeline.layout();
 
         cmd_buf.set_viewport(0, [viewport].into_iter().collect())?;
-        cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone()])?;
+        cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone(), descriptor_set_materials.clone()])?;
 
         if self.wireframe_mode == WireframeMode::Solid || self.wireframe_mode == WireframeMode::Both {
             let solid_graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
@@ -355,6 +423,23 @@ impl SceneRenderer {
         }
     }
 
+    fn check_changed_materials(&mut self, scene: &mut Scene) {
+        if self.textures_changed {
+            debug!("Textures changed");
+            for resource in &mut self.resources {
+                resource.textures_changed = true;
+            }
+        }
+        if self.materials_changed {
+            debug!("Materials changed");
+            for resource in &mut self.resources {
+                resource.materials_changed = true;
+            }
+        }
+        self.textures_changed = false;
+        self.materials_changed = false;
+    }
+
     fn prepare_static_scene(&mut self, scene: &mut Scene) {
         if !self.static_scene_changed {
             return; // Do nothing.
@@ -375,16 +460,7 @@ impl SceneRenderer {
         // TODO: par_iter
         query.iter(&scene.world).for_each(|(render_component, transform)| {
 
-            let mut object_data = ObjectDataUBO::default();
-            Self::update_object_date_transform(transform, &mut object_data);
-
-            self.render_info.push(RenderInfo{
-                mesh: render_component.mesh.clone(),
-                index
-            });
-
-            self.object_data.push(object_data);
-            self.object_indices.push(ObjectIndexUBO{ index });
+            self.prepare_scene_object(index, render_component, transform);
             index += 1;
         });
 
@@ -413,16 +489,7 @@ impl SceneRenderer {
         // TODO: par_iter
         query.iter(&scene.world).for_each(|(render_component, transform)| {
 
-            let mut object_data = ObjectDataUBO::default();
-            Self::update_object_date_transform(transform, &mut object_data);
-
-            self.render_info.push(RenderInfo{
-                mesh: render_component.mesh.clone(),
-                index
-            });
-
-            self.object_data.push(object_data);
-            self.object_indices.push(ObjectIndexUBO{ index });
+            self.prepare_scene_object(index, render_component, transform);
             index += 1;
         });
 
@@ -436,18 +503,50 @@ impl SceneRenderer {
         self.dynamic_object_count = index - self.static_object_count;
     }
 
-    fn update_buffer_capacity(&mut self) {
+    fn prepare_scene_object(&mut self, index: u32, render_component: &RenderComponent<BaseVertex>, transform: &Transform) {
+        let mut object_data = ObjectDataUBO::default();
+        Self::update_object_date_transform(transform, &mut object_data);
+
+        if let Some(material) = render_component.material() {
+            self.register_material(material);
+        }
+
+        self.render_info.push(RenderInfo{
+            mesh: render_component.mesh.clone(),
+            index
+        });
+
+        self.object_data.push(object_data);
+        self.object_indices.push(ObjectIndexUBO{ index });
+    }
+
+    fn update_buffer_capacities(&mut self) {
         let num_objects = self.static_object_count + self.dynamic_object_count;
 
-        if num_objects > self.max_object_count {
-            // Grow the GPU buffers by 1.5x
-            // TODO: tune this value - We don't want to over-allocate memory, and we don't want to resize the buffers too often.
-            let growth_rate = 1.5;
+        // Grow the GPU buffers by 1.5x
+        // TODO: tune this value - We don't want to over-allocate memory, and we don't want to resize the buffers too often.
+        let growth_rate = 1.5;
 
+        if num_objects > self.max_object_count {
             let prev_max_objects = self.max_object_count;
-            self.max_object_count = (num_objects as f32 * growth_rate).ceil() as u32;
-            debug!("SceneRenderer - Growing GPU buffers. Previous max objects: {prev_max_objects}, new max objects: {}", self.max_object_count);
+            self.max_object_count = Self::grow_capacity(self.max_object_count, num_objects, growth_rate);
+            debug!("SceneRenderer - Growing ObjectData GPU buffers. Previous max objects: {prev_max_objects}, new max objects: {}", self.max_object_count);
         }
+
+        let num_materials = self.materials.len() as u32;
+
+        if num_materials > self.max_material_count {
+            let prev_max_materials = self.max_material_count;
+            self.max_material_count = Self::grow_capacity(self.max_material_count, num_objects, growth_rate);
+            debug!("SceneRenderer - Growing Material GPU buffers. Previous max materials: {prev_max_materials}, new max materials: {}", self.max_material_count);
+        }
+    }
+
+    fn grow_capacity(mut capacity: u32, required_capacity: u32, growth_rate: f64) -> u32 {
+        while capacity < required_capacity {
+            capacity = (capacity as f64 * growth_rate) as u32
+        }
+        capacity
     }
 
     fn update_object_date_transform(transform: &Transform, object_data_buffer: &mut ObjectDataUBO) {
@@ -504,17 +603,22 @@ impl SceneRenderer {
         let frame_index = engine.graphics.current_frame_index();
         let resource = &mut self.resources[frame_index];
 
+        Self::update_object_data_gpu_resources(self.static_object_count as usize, self.dynamic_object_count as usize, &self.object_data, &self.object_indices, resource)?;
+
+        Self::update_material_data_gpu_resources(&self.textures, &self.material_data, self.null_texture.clone(), self.default_sampler.clone(), resource)?;
+
+        Ok(())
+    }
+
+    fn update_object_data_gpu_resources(static_count: usize, dynamic_count: usize, object_data: &Vec<ObjectDataUBO>, object_indices: &Vec<ObjectIndexUBO>, resource: &mut FrameResource) -> Result<()> {
+
         if !resource.descriptor_writes_world.is_empty() {
-            let mut descriptor_set_world = resource.descriptor_set_world.as_mut().unwrap().clone();
+            let descriptor_set_world = resource.descriptor_set_world.as_ref().unwrap().clone();
             let writes = mem::take(&mut resource.descriptor_writes_world);
-            // debug!("Writing world info descriptor sets: {writes:?}");
 
             unsafe { descriptor_set_world.update_by_ref(writes, []) }?
-
         }
 
-        let static_count = self.static_object_count as usize;
-        let dynamic_count = self.dynamic_object_count as usize;
         let static_begin = 0;
         let static_end = static_begin + static_count;
         let dynamic_begin = static_end;
@@ -524,35 +628,76 @@ impl SceneRenderer {
 
             {
                 let buffer_object_data = resource.buffer_object_data.as_mut().unwrap();
-                debug_assert!(self.object_data.len() <= buffer_object_data.len() as usize);
+                debug_assert!(object_data.len() <= buffer_object_data.len() as usize);
                 let mut writer = buffer_object_data.write()?;
 
                 if resource.static_scene_changed && static_count > 0 {
-                    writer[static_begin..static_end].copy_from_slice(&self.object_data[static_begin..static_end]);
+                    writer[static_begin..static_end].copy_from_slice(&object_data[static_begin..static_end]);
                 }
                 if dynamic_count > 0 {
-                    writer[dynamic_begin..dynamic_end].copy_from_slice(&self.object_data[dynamic_begin..dynamic_end]);
+                    writer[dynamic_begin..dynamic_end].copy_from_slice(&object_data[dynamic_begin..dynamic_end]);
                 }
-                // writer[..self.object_data.len()].copy_from_slice(self.object_data.as_slice());
             }
 
 
             {
                 let buffer_object_indices = resource.buffer_object_indices.as_mut().unwrap();
-                debug_assert!(self.object_indices.len() <= buffer_object_indices.len() as usize);
+                debug_assert!(object_indices.len() <= buffer_object_indices.len() as usize);
                 let mut writer = buffer_object_indices.write()?;
-                writer[..self.object_indices.len()].copy_from_slice(self.object_indices.as_slice());
+                writer[..object_indices.len()].copy_from_slice(object_indices.as_slice());
 
                 if resource.static_scene_changed && static_count > 0 {
-                    writer[static_begin..static_end].copy_from_slice(&self.object_indices[static_begin..static_end]);
+                    writer[static_begin..static_end].copy_from_slice(&object_indices[static_begin..static_end]);
                 }
                 if dynamic_count > 0 {
-                    writer[dynamic_begin..dynamic_end].copy_from_slice(&self.object_indices[dynamic_begin..dynamic_end]);
+                    writer[dynamic_begin..dynamic_end].copy_from_slice(&object_indices[dynamic_begin..dynamic_end]);
                 }
             }
         }
 
         resource.static_scene_changed = false;
+
+        Ok(())
+    }
+    fn update_material_data_gpu_resources(textures: &Vec<Texture>, material_data: &Vec<MaterialUBO>, null_texture: Arc<ImageView>, default_sampler: Arc<Sampler>, resource: &mut FrameResource) -> Result<()> {
+
+        if resource.textures_changed {
+            debug!("Textures changed: Writing 0..{} textures", textures.len());
+            let descriptor_set_materials = resource.descriptor_set_materials.as_ref().unwrap().clone();
+            let binding = 0;
+            let binding_info = descriptor_set_materials.layout().bindings().get(&binding).unwrap();
+            let descriptor_count = binding_info.descriptor_count as usize;
+            
+            let mut elements: Vec<(Arc<ImageView>, Arc<Sampler>)> = textures.iter().map(|tex| (tex.image_view(), tex.sampler())).collect();
+            elements.resize_with(descriptor_count, || (null_texture.clone(), default_sampler.clone()));
+            
+            let write = WriteDescriptorSet::image_view_sampler_array(binding, 0, elements);
+            resource.descriptor_writes_materials.push(write);
+        }
+
+        if !resource.descriptor_writes_materials.is_empty() {
+            let descriptor_set_materials = resource.descriptor_set_materials.as_ref().unwrap().clone();
+            let writes = mem::take(&mut resource.descriptor_writes_materials);
+
+            unsafe { descriptor_set_materials.update_by_ref(writes, []) }?
+        }
+
+        if resource.materials_changed {
+
+            let idx_begin = 0;
+            let idx_end = material_data.len();
+
+            debug!("Material data changed: Uploading {idx_begin}..{idx_end} materials");
+
+            let buffer_material_data = resource.buffer_material_data.as_mut().unwrap();
+            debug_assert!(material_data.len() <= buffer_material_data.len() as usize);
+            let mut writer = buffer_material_data.write()?;
+
+            writer[idx_begin..idx_end].copy_from_slice(&material_data[idx_begin..idx_end]);
+        }
+
+        resource.textures_changed = false;
+        resource.materials_changed = false;
 
         Ok(())
     }
@@ -667,17 +812,28 @@ impl SceneRenderer {
         let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), [], [])?;
         resource.descriptor_set_world = Some(descriptor_set);
 
+        // Material info descriptor set
+        let descriptor_set_layout_index = 2;
+        let descriptor_set_layout = descriptor_set_layouts.get(descriptor_set_layout_index).unwrap();
+        let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), [], [])?;
+        resource.descriptor_set_materials = Some(descriptor_set);
+
         if let Some(buffer) = &resource.buffer_object_data {
             resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(0, buffer.clone()));
         }
         if let Some(buffer) = &resource.buffer_object_indices {
             resource.descriptor_writes_world.push(WriteDescriptorSet::buffer(1, buffer.clone()));
         }
+        if let Some(buffer) = &resource.buffer_material_data {
+            resource.descriptor_writes_materials.push(WriteDescriptorSet::buffer(1, buffer.clone()));
+        }
+        resource.textures_changed = true;
+        resource.materials_changed = true;
 
         Ok(())
     }
 
-    fn map_object_data_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
+    fn map_object_data_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<dyn MemoryAllocator>) -> Result<()>{
         let max_buffer_size: DeviceSize = (size_of::<ObjectDataUBO>() * max_object_count) as DeviceSize;
 
         if let Some(buffer) = &resource.buffer_object_data {
@@ -688,7 +844,7 @@ impl SceneRenderer {
         }
 
         if resource.buffer_object_data.is_none() {
-            debug!("Allocating ObjectData GPU buffer for {max_object_count} objects");
+            debug!("Allocating ObjectData GPU buffer for {max_object_count} objects ({max_buffer_size} bytes)");
 
             let buffer_create_info = BufferCreateInfo{
                 usage: BufferUsage::STORAGE_BUFFER,
@@ -710,7 +866,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    fn map_object_indices_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
+    fn map_object_indices_buffer(resource: &mut FrameResource, max_object_count: usize, memory_allocator: Arc<dyn MemoryAllocator>) -> Result<()>{
         let max_buffer_size: DeviceSize = (size_of::<ObjectIndexUBO>() * max_object_count) as DeviceSize;
 
         if let Some(buffer) = &resource.buffer_object_indices {
@@ -721,7 +877,7 @@ impl SceneRenderer {
         }
 
         if resource.buffer_object_indices.is_none() {
-            debug!("Allocating ObjectIndices GPU buffer for {max_object_count} objects");
+            debug!("Allocating ObjectIndices GPU buffer for {max_object_count} objects ({max_buffer_size} bytes)");
 
             let buffer_create_info = BufferCreateInfo{
                 usage: BufferUsage::STORAGE_BUFFER,
@@ -741,6 +897,139 @@ impl SceneRenderer {
         }
 
         Ok(())
+    }
+
+    fn map_materials_buffer(resource: &mut FrameResource, max_material_count: usize, memory_allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
+        let max_buffer_size: DeviceSize = (size_of::<MaterialUBO>() * max_material_count) as DeviceSize;
+
+        if let Some(buffer) = &resource.buffer_material_data {
+            if max_buffer_size > buffer.size() {
+                // Existing buffer is too small. It will be re-allocated
+                resource.buffer_material_data = None;
+            }
+        }
+
+        if resource.buffer_material_data.is_none() {
+            debug!("Allocating Materials GPU buffer for {max_material_count} materials ({max_buffer_size} bytes)");
+
+            let buffer_create_info = BufferCreateInfo{
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            };
+
+            let allocation_info = AllocationCreateInfo{
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            };
+
+            let buffer_materials = Buffer::new_slice::<MaterialUBO>(memory_allocator.clone(), buffer_create_info, allocation_info, max_material_count as DeviceSize)?;
+
+            resource.descriptor_writes_materials.push(WriteDescriptorSet::buffer(1, buffer_materials.clone()));
+
+            resource.buffer_material_data = Some(buffer_materials);
+        }
+
+        Ok(())
+    }
+
+    pub fn register_texture(&mut self, texture: &Texture) -> usize {
+
+        let id = texture.resource_id();
+        let index = self.textures_map.entry(id).or_insert_with(|| {
+            let index = self.textures.len();
+            debug!("Registering texture: {index}");
+            self.textures.push(texture.clone());
+            self.textures_changed = true;
+            index
+        });
+
+        *index
+    }
+
+    pub fn unregister_texture_index(&mut self, texture_index: usize) -> bool {
+        if texture_index > self.textures.len() {
+            return false;
+        }
+
+        // TODO: we need to remove the texture from the array, and ensure index references for remaining textures are correct.
+        // let texture = &self.textures[texture_index];
+        // self.textures.swap_remove()
+        // true
+        false
+    }
+
+    pub fn register_material(&mut self, material: &Material) -> usize {
+
+        let texture_idx = self.register_texture(material.texture());
+
+        let id = material.resource_id();
+        let index = self.materials_map.entry(id).or_insert_with(|| {
+            let index = self.materials.len();
+            debug!("Registering material: {index}");
+            self.materials.push(material.clone());
+            self.material_data.push(MaterialUBO{
+                texture_index: texture_idx as u32,
+            });
+            self.materials_changed = true;
+            index
+        });
+
+        *index
+    }
+
+    fn create_null_texture(graphics: &GraphicsManager) -> Result<Arc<ImageView>>{
+        let allocator = graphics.memory_allocator();
+
+        let width = 2;
+        let height = 2;
+        
+        const PIXEL_0: [u8; 4] = [0, 0, 0, 255];
+        const PIXEL_1: [u8; 4] = [255, 0, 255, 255];
+        
+        let mut data = vec![128; (4 * width * height) as usize];
+        data[0..4].clone_from_slice(&PIXEL_0);
+        data[4..8].clone_from_slice(&PIXEL_1);
+        data[8..12].clone_from_slice(&PIXEL_1);
+        data[12..16].clone_from_slice(&PIXEL_0);
+        
+        let mut cmd_buf = graphics.begin_transfer_commands()?;
+        
+        let staging_buffer = graphics.create_staging_subbuffer::<u8>(data.len() as DeviceSize)?;
+        let image_view = Texture::create_image_view_2d(allocator, width, height, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST)?;
+        // GraphicsManager::upload_buffer_data_iter(staging_buffer.clone(), data)?;
+        // Texture::load_image_data_from_buffer(&mut cmd_buf, staging_buffer.clone(), image_view.image().clone())?;
+        Texture::load_image_from_data_staged(&mut cmd_buf, staging_buffer.clone(), &data, image_view.image().clone())?;
+
+        graphics.submit_transfer_commands(cmd_buf)?
+            .wait(None)?;
+        
+        let read_back_buffer = graphics.create_readback_subbuffer::<u8>(staging_buffer.len())?;
+
+        let mut cmd_buf = graphics.begin_transfer_commands()?;
+
+        // let copy_info = CopyImageToBufferInfo {
+        //     ..CopyImageToBufferInfo::image_buffer(image_view.image().clone(), read_back_buffer.clone())
+        // };
+        // cmd_buf.copy_image_to_buffer(copy_info)?;
+        let copy_info = CopyBufferInfo {
+            ..CopyBufferInfo::buffers(staging_buffer.clone(), read_back_buffer.clone())
+        };
+        cmd_buf.copy_buffer(copy_info)?;
+        graphics.submit_transfer_commands(cmd_buf)?
+            .wait(None)?;
+        
+        let read = read_back_buffer.read()?;
+        let read_data = read.to_vec();
+        
+        for (i, px) in read_data.iter().enumerate() {
+            debug!("Pixel[{i}] = {px}");
+        }
+        
+        Ok(image_view)
+    }
+
+    fn create_default_sampler(device: Arc<Device>) -> Result<Arc<Sampler>> {
+        Texture::create_default_sampler(device)
     }
 
     fn curr_resource<'a>(resources: &'a mut [FrameResource], engine: &Engine) -> &'a mut FrameResource {
