@@ -5,7 +5,7 @@ mod util;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{AxisDirection, BaseVertex, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{AxisDirection, BaseVertex, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -17,8 +17,6 @@ use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
 use std::fs;
 use std::sync::Arc;
-use vulkano::buffer::Subbuffer;
-use vulkano::DeviceSize;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 

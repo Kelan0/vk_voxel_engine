@@ -1,4 +1,4 @@
-use crate::core::{CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
+use crate::core::{CommandBuffer, Mesh, MeshConfiguration};
 use anyhow::Result;
 use glam::Vec3;
 use std::sync::Arc;
@@ -163,7 +163,7 @@ impl <V: Vertex + Default> MeshData<V> {
         
         let index = self.create_cuboid(pos_min, pos_max);
         
-        self.texture_quad(index + 0, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         self.texture_quad(index + 4, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         self.texture_quad(index + 8, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         self.texture_quad(index + 12, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);

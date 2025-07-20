@@ -190,7 +190,7 @@ impl <V: Vertex> Mesh<V> {
 
     fn get_raw_bytes_slice<T>(data: &[T]) -> &[u8] {
         let ptr = data as *const [T] as *const u8;
-        let len = size_of::<T>() * data.len();
+        let len = size_of_val(data);
         unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
