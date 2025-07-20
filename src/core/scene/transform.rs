@@ -6,6 +6,7 @@ pub struct Transform {
     pub affine: Affine3A,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for Transform {
     fn default() -> Self {
         Self {
@@ -29,7 +30,7 @@ impl Transform {
     }
 
     pub fn transform_local(&mut self, affine: Affine3A) -> &mut Transform {
-        self.affine = self.affine * affine;
+        self.affine *= affine;
         self
     }
 
@@ -134,14 +135,14 @@ impl Transform {
         })
     }
 
-    pub fn to_mat4(&self) -> Mat4 {
+    pub fn get_mat4(&self) -> Mat4 {
         self.affine.into()
     }
 
     pub fn write_model_matrix(&self, matrix_data: &mut [f32]) {
         debug_assert!(matrix_data.len() >= 16);
 
-        self.to_mat4().write_cols_to_slice(matrix_data);
+        self.get_mat4().write_cols_to_slice(matrix_data);
 
         // // 0 | 4 |  8 | 12
         // // 1 | 5 |  9 | 13

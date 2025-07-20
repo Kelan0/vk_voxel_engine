@@ -35,8 +35,8 @@ impl PartialEq for Material {
 }
 
 impl PartialOrd for Material {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.resource_id.partial_cmp(&other.resource_id)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { 
+        Some(self.cmp(other)) 
     }
 }
 

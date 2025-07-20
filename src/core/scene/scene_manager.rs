@@ -1,10 +1,9 @@
+use crate::application::Ticker;
+use crate::core::Engine;
 use anyhow::Result;
 use bevy_ecs::bundle::Bundle;
 use bevy_ecs::component::Component;
-use bevy_ecs::prelude::Added;
 use bevy_ecs::world::{EntityWorldMut, World};
-use crate::application::Ticker;
-use crate::core::{BaseVertex, Engine, RenderComponent};
 
 pub struct Scene {
     pub world: World,
@@ -15,9 +14,11 @@ pub struct EntityNameComponent {
     name: String
 }
 
+pub type OnRenderCallback = Box<dyn Fn(bevy_ecs::entity::Entity, &mut Ticker, &mut Engine) + Send + Sync + 'static>;
+
 #[derive(Component)]
 pub struct UpdateComponent {
-    pub on_render: Box<dyn Fn(bevy_ecs::entity::Entity, &mut Ticker, &mut Engine) + Send + Sync + 'static>,
+    pub on_render: OnRenderCallback,
 }
 
 pub struct Entity<'a> {

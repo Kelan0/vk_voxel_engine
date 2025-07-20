@@ -12,9 +12,8 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::Read;
-use std::mem;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SecondaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
@@ -26,16 +25,15 @@ use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange,
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::allocator::{AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryAllocator, MemoryTypeFilter};
-use vulkano::memory::{MemoryHeapFlags, MemoryPropertyFlags};
+use vulkano::memory::MemoryHeapFlags;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::query::{QueryControlFlags, QueryPipelineStatisticFlags, QueryPool, QueryPoolCreateInfo, QueryResultFlags, QueryType};
 use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency, SubpassDescription};
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::future::{FenceSignalFuture, JoinFuture, NowFuture};
-use vulkano::sync::{AccessFlags, GpuFuture, ImageMemoryBarrier, PipelineStage, PipelineStages, Sharing};
+use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
-use vulkano::buffer::{AllocateBufferError, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -1244,6 +1242,7 @@ impl GraphicsManager {
 
         let future = match future {
             Ok(future) => {
+                #[allow(clippy::arc_with_non_send_sync)]
                 Some(Arc::new(future))
             }
             Err(Validated::Error(VulkanError::OutOfDate)) => {
@@ -1341,8 +1340,9 @@ impl GraphicsManager {
             return None;
         }
 
-        if let Err(_) = unsafe { cmd_buf.write_timestamp(self.timestamp_query_pool.clone(), query_index, stage) }
-            .inspect_err(|err| error!("Failed to write timestamp query {} for BottomOfPipe: {:?}\n{:?}", query_index, err, err.source())) {
+        if unsafe { cmd_buf.write_timestamp(self.timestamp_query_pool.clone(), query_index, stage) }
+            .inspect_err(|err| error!("Failed to write timestamp query {} for BottomOfPipe: {:?}\n{:?}", query_index, err, err.source()))
+            .is_err() {
             return None;
         }
 
@@ -1442,9 +1442,7 @@ impl GraphicsManager {
         self.load_shader_module_from_source(source.as_str(), path, entry_point_name, kind, options)
     }
 
-    pub fn create_staging_subbuffer<T: BufferContents>(&self, len: DeviceSize) -> Result<Subbuffer<[T]>> {
-
-        let allocator = self.memory_allocator();
+    pub fn create_staging_subbuffer<T: BufferContents>(allocator: Arc<dyn MemoryAllocator>, len: DeviceSize) -> Result<Subbuffer<[T]>> {
 
         let buffer_create_info = BufferCreateInfo{
             usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
@@ -1461,13 +1459,11 @@ impl GraphicsManager {
             ..Default::default()
         };
 
-        let buffer = Buffer::new_slice::<T>(allocator.clone(), buffer_create_info, allocation_info, len)?;
+        let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
         Ok(buffer)
     }
 
-    pub fn create_readback_subbuffer<T: BufferContents>(&self, len: DeviceSize) -> Result<Subbuffer<[T]>> {
-
-        let allocator = self.memory_allocator();
+    pub fn create_readback_subbuffer<T: BufferContents>(allocator: Arc<dyn MemoryAllocator>, len: DeviceSize) -> Result<Subbuffer<[T]>> {
 
         let buffer_create_info = BufferCreateInfo{
             usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
@@ -1484,11 +1480,11 @@ impl GraphicsManager {
             ..Default::default()
         };
 
-        let buffer = Buffer::new_slice::<T>(allocator.clone(), buffer_create_info, allocation_info, len)?;
+        let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
         Ok(buffer)
     }
 
-    pub fn upload_buffer_data_iter<T, I>(buffer: Subbuffer<[T]>, iter: I) -> Result<()>
+    pub fn upload_buffer_data_iter<T, I>(buffer: &Subbuffer<[T]>, iter: I) -> Result<()>
     where
         T: BufferContents,
         I: IntoIterator<Item = T>,
@@ -1503,7 +1499,22 @@ impl GraphicsManager {
         Ok(())
     }
 
-    pub fn upload_buffer_data_sized<T>(buffer: Subbuffer<[T]>, data: &[T]) -> Result<()>
+    pub fn upload_buffer_data_iter_ref<'a, T, I>(buffer: &Subbuffer<[T]>, iter: I) -> Result<()>
+    where
+        T: BufferContents + Clone + Copy,
+        I: IntoIterator<Item = &'a T>,
+        I::IntoIter: ExactSizeIterator{
+
+        let mut write = buffer.write()?;
+
+        for (o, &i) in write.iter_mut().zip(iter) {
+            *o = i;
+        }
+
+        Ok(())
+    }
+
+    pub fn upload_buffer_data_sized<T>(buffer: &Subbuffer<[T]>, data: &[T]) -> Result<()>
     where
         T: BufferContents + Sized + Clone,
     {
@@ -1515,7 +1526,7 @@ impl GraphicsManager {
         Ok(())
     }
 
-    pub fn upload_buffer_data_unsized<T>(buffer: Subbuffer<T>, data: &T) -> Result<()>
+    pub fn upload_buffer_data_unsized<T>(buffer: &Subbuffer<T>, data: &T) -> Result<()>
     where
         T: BufferContents + ?Sized,
     {
@@ -1543,7 +1554,7 @@ impl GraphicsManager {
         Ok(fence)
     }
     
-    pub fn transition_image_layout<L>(cmd_buf: PrimaryCommandBuffer, image: Arc<Image>) {
+    pub fn transition_image_layout<L>(_cmd_buf: PrimaryCommandBuffer, _image: Arc<Image>) {
         // ImageLayout::ShaderReadOnlyOptimal;
         // let barrier = ImageMemoryBarrier{
         //     

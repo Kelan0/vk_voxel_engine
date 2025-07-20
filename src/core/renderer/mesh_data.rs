@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::core::{CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
 use anyhow::Result;
-use glam::{Vec2, Vec3};
+use glam::Vec3;
+use std::sync::Arc;
 use vulkano::memory::allocator::MemoryAllocator;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
-use crate::core::{Mesh, MeshConfiguration};
 
 #[derive(Clone, PartialEq)]
 pub struct MeshData<V: Vertex> {
@@ -42,12 +42,14 @@ impl <V: Vertex> MeshData<V> {
         i
     }
     
-    pub fn create_quad(&mut self, v00: V, v01: V, v11: V, v10: V) -> u32 {
+    pub fn create_quad(&mut self, v00: V, v01: V, v11: V, v10: V) -> (u32, u32) {
+        let vert_idx = self.vertices.len() as u32;
         let i00 = self.add_vertex(v00);
         let i01 = self.add_vertex(v01);
         let i11 = self.add_vertex(v11);
         let i10 = self.add_vertex(v10);
-        self.add_quad(i00, i01, i11, i10)
+        let index_idx = self.add_quad(i00, i01, i11, i10);
+        (vert_idx, index_idx)
     }
 
     fn create_triangle_primitive(&mut self, i0: u32, i1: u32, i2: u32) -> u32 {
@@ -59,9 +61,18 @@ impl <V: Vertex> MeshData<V> {
     }
     
     pub fn build_mesh(self, allocator: Arc<dyn MemoryAllocator>) -> Result<Mesh<V>> {
-        let mesh = Mesh::new(allocator.clone(), MeshConfiguration {
-            vertices: Vec::from(self.vertices),
-            indices: Some(Vec::from(self.indices)),
+        let mesh = Mesh::new(allocator, MeshConfiguration {
+            vertices: self.vertices,
+            indices: Some(self.indices),
+        })?;
+        
+        Ok(mesh)
+    }
+    
+    pub fn build_mesh_staged<L>(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer<L>) -> Result<Mesh<V>> {
+        let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, MeshConfiguration {
+            vertices: self.vertices,
+            indices: Some(self.indices),
         })?;
         
         Ok(mesh)
@@ -82,12 +93,13 @@ impl <V: Vertex + Default> MeshData<V> {
 
     pub fn texture_quad(&mut self, start_index: u32, pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2])
     where V: VertexHasTexture<f32> {
-        self.vertices[(start_index + 0) as usize].set_texture(pos_btm_left);
+        self.vertices[start_index as usize].set_texture(pos_btm_left);
         self.vertices[(start_index + 1) as usize].set_texture(pos_btm_right);
         self.vertices[(start_index + 2) as usize].set_texture(pos_top_right);
         self.vertices[(start_index + 3) as usize].set_texture(pos_top_left);
     }
     
+    #[allow(clippy::too_many_arguments)] // grr >:(
     pub fn create_quad_face(&mut self, pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2], left: [f32; 3], up: [f32; 3], offset: f32) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
         let up = Vec3::from_slice(&up);
@@ -104,45 +116,59 @@ impl <V: Vertex + Default> MeshData<V> {
         let v11 = self.vertex().pos(pos_top_right.into()).normal(normal.into()).get();
         let v10 = self.vertex().pos(pos_top_left.into()).normal(normal.into()).get();
         
-        self.create_quad(v00, v01, v11, v10)
+        let (idx, _) = self.create_quad(v00, v01, v11, v10);
+        idx
     }
+    
     pub fn create_box_face(&mut self, direction: AxisDirection, pos_min: [f32; 2], pos_max: [f32; 2], offset: f32) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
         match direction {
-            AxisDirection::NegX => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], -offset),
+            AxisDirection::NegX => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], offset),
             AxisDirection::PosX => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], offset),
-            AxisDirection::NegY => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], -offset),
+            AxisDirection::NegY => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], offset),
             AxisDirection::PosY => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], offset),
-            AxisDirection::NegZ => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], -offset),
+            AxisDirection::NegZ => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
             AxisDirection::PosZ => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
         }
+    }
+    
+    pub fn create_box_face_textured(&mut self, direction: AxisDirection, pos_min: [f32; 2], pos_max: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
+    where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
+        const FLIP_Y: bool = true;
+        let index = self.create_box_face(direction, pos_min, pos_max, offset);
+        if FLIP_Y {
+            self.texture_quad(index, [tex_min[0], tex_max[1]], [tex_max[0], tex_max[1]], [tex_max[0], tex_min[1]], [tex_min[0], tex_min[1]]);
+        } else {
+            self.texture_quad(index, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        }
+        index
     }
 
     pub fn create_cuboid(&mut self, pos_min: [f32; 3], pos_max: [f32; 3]) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
-        let i;
-        i = self.create_box_face(AxisDirection::NegX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], pos_min[0]);
-        _ = self.create_box_face(AxisDirection::PosX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], pos_max[0]);
-        _ = self.create_box_face(AxisDirection::NegY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], pos_min[1]);
-        _ = self.create_box_face(AxisDirection::PosY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], pos_max[1]);
-        _ = self.create_box_face(AxisDirection::NegZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], pos_min[2]);
-        _ = self.create_box_face(AxisDirection::PosZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], pos_max[2]);
-        i
+        let index = 
+        self.create_box_face(AxisDirection::NegX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], -pos_min[0]);
+        self.create_box_face(AxisDirection::PosX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], pos_max[0]);
+        self.create_box_face(AxisDirection::NegY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], -pos_min[1]);
+        self.create_box_face(AxisDirection::PosY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], pos_max[1]);
+        self.create_box_face(AxisDirection::NegZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], -pos_min[2]);
+        self.create_box_face(AxisDirection::PosZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], pos_max[2]);
+        index
     }
 
-    pub fn create_cuboid_textured(&mut self, pos_min: [f32; 3], pos_max: [f32; 3]) -> u32
+    pub fn create_cuboid_textured(&mut self, pos_min: [f32; 3], pos_max: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
         
         let index = self.create_cuboid(pos_min, pos_max);
         
-        self.texture_quad(index + 0, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
-        self.texture_quad(index + 4, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
-        self.texture_quad(index + 8, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
-        self.texture_quad(index + 12, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
-        self.texture_quad(index + 16, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
-        self.texture_quad(index + 20, [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]);
+        self.texture_quad(index + 0, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index + 4, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index + 8, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index + 12, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index + 16, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(index + 20, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         
         index
     }

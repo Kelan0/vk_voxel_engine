@@ -5,7 +5,7 @@ mod util;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{BaseVertex, Material, Mesh, MeshConfiguration, MeshData, PixelData, PixelDataFormat, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, UpdateComponent, WireframeMode};
+use crate::core::{AxisDirection, BaseVertex, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -17,7 +17,10 @@ use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
 use std::fs;
 use std::sync::Arc;
-use vulkano::image::{ImageLayout, ImageUsage};
+use vulkano::buffer::Subbuffer;
+use vulkano::DeviceSize;
+use vulkano::format::Format;
+use vulkano::image::ImageUsage;
 
 struct TestGame {
     camera_pitch: f32,
@@ -75,10 +78,9 @@ impl TestGame {
 
         scene.create_entity("TestEntity2")
             .add_component(render_component)
-            .add_component(Transform::new()
+            .add_component(*Transform::new()
                 .translate(pos)
-                .rotate_local_z(f32::to_radians(30.0))
-                .clone())
+                .rotate_local_z(f32::to_radians(30.0)))
             .add_component(UpdateComponent{
                 on_render: Box::new(|entity: Entity, ticker: &mut Ticker, engine: &mut Engine| {
                     let mut entity = engine.scene.world.entity_mut(entity);
@@ -111,23 +113,41 @@ impl App for TestGame {
 
         let allocator = engine.graphics.memory_allocator();
         
-        let sampler = Texture::create_default_sampler(engine.graphics.device())?;
-        
-        let buffer = engine.graphics.create_staging_subbuffer::<u8>(512 * 512 * 4)?;
+        let buffer = GraphicsManager::create_staging_subbuffer::<u8>(allocator.clone(), 512 * 512 * 4)?;
 
         let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
-        let image = Texture::load_image_from_file_staged(&mut cmd_buf, allocator.clone(), buffer.clone(), "res/textures/blocks/grass_side_carried.png", ImageUsage::SAMPLED)?;
-        let image_view = Texture::create_image_view_from_image(image)?;
-        let texture = Texture::new(image_view, sampler);
+
+        let mut texture_atlas = TextureAtlas::new(allocator.clone(), 16, 4, 4, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST)?;
+
+        texture_atlas.begin_loading(allocator.clone(), Some(buffer.clone()))?;
+        texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_top", 0, 0, "res/textures/blocks/crafting_table_top.png")?;
+        texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_side", 1, 0, "res/textures/blocks/crafting_table_side.png")?;
+        texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_front", 0, 1, "res/textures/blocks/crafting_table_front.png")?;
+        texture_atlas.load_texture_from_file(&mut cmd_buf, "planks_oak", 2, 3, "res/textures/blocks/planks_oak.png")?;
+        texture_atlas.finish_loading();
+
+        let c0 = texture_atlas.find_coords_for_cell("crafting_table_top").expect("crafting_table_top - Coords not found in texture atles");
+        let c1 = texture_atlas.find_coords_for_cell("crafting_table_side").expect("crafting_table_side - Coords not found in texture atles");
+        let c2 = texture_atlas.find_coords_for_cell("crafting_table_front").expect("crafting_table_front - Coords not found in texture atles");
+        let c3 = texture_atlas.find_coords_for_cell("planks_oak").expect("planks_oak - Coords not found in texture atles");
+
+        let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
+        // mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);
+        mesh_data.create_box_face_textured(AxisDirection::NegX, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosX, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::NegY, [-0.5, -0.5], [0.5, 0.5], 0.5, c3[0], c3[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosY, [-0.5, -0.5], [0.5, 0.5], 0.5, c0[0], c0[1]);
+        mesh_data.create_box_face_textured(AxisDirection::NegZ, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosZ, [-0.5, -0.5], [0.5, 0.5], 0.5, c2[0], c2[1]);
+
+        let mesh1 = Arc::new(mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf)?);
+
         engine.graphics.submit_transfer_commands(cmd_buf)?
             .wait(None)?;
-        
-        let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
-        mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]);
-        let mesh1 = Arc::new(mesh_data.build_mesh(allocator.clone())?);
-        
+
+
         let render_component_1 = RenderComponent::new(RenderType::Static, mesh1)
-            .with_material(Some(Material::new(texture)));
+            .with_material(Some(Material::new(texture_atlas.texture().clone())));
         
         self.create_test_mesh(allocator.clone())?;
 
@@ -147,10 +167,9 @@ impl App for TestGame {
 
                 engine.scene.create_entity("TestEntity1")
                     .add_component(render_component_1.clone())
-                    .add_component(Transform::new()
+                    .add_component(*Transform::new()
                         .translate(Vec3::new(x, 0.0, z))
-                        .rotate_z(f32::to_radians(30.0))
-                        .clone());
+                        .rotate_z(f32::to_radians(30.0)));
             }
         }
 
@@ -204,7 +223,7 @@ impl App for TestGame {
 
 
             if let Some(stats) = engine.graphics.debug_pipeline_statistics() {
-                debug!("{:?}", stats);
+                debug!("{stats:?}");
             }
         }
 
