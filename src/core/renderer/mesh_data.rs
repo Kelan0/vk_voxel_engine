@@ -70,7 +70,7 @@ impl <V: Vertex> MeshData<V> {
         Ok(mesh)
     }
     
-    pub fn build_mesh_staged<L>(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer<L>) -> Result<Mesh<V>> {
+    pub fn build_mesh_staged(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer) -> Result<Mesh<V>> {
         let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, MeshConfiguration {
             vertices: self.vertices,
             indices: Some(self.indices),

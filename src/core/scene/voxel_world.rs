@@ -352,7 +352,7 @@ pub mod world {
             }
         }
 
-        fn update<L>(&mut self, cmd_buf: &mut CommandBuffer<L>, engine: &mut Engine) -> Result<()> {
+        fn update(&mut self, cmd_buf: &mut CommandBuffer, engine: &mut Engine) -> Result<()> {
             if self.dirty {
                 self.dirty = false;
 

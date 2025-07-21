@@ -110,7 +110,7 @@ impl Texture {
         Ok(sampler)
     }
 
-    pub fn load_image_data_from_buffer<L, T>(cmd_buf: &mut CommandBuffer<L>, buffer: &Subbuffer<[T]>, image: Arc<Image>) -> Result<()>
+    pub fn load_image_data_from_buffer<T>(cmd_buf: &mut CommandBuffer, buffer: &Subbuffer<[T]>, image: Arc<Image>) -> Result<()>
     where T: BufferContents + Sized {
 
         let copy_info = CopyBufferToImageInfo{
@@ -122,7 +122,7 @@ impl Texture {
         Ok(())
     }
 
-    pub fn load_image_region_data_from_buffer<L, T>(cmd_buf: &mut CommandBuffer<L>, buffer: &Subbuffer<[T]>, dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()>
+    pub fn load_image_region_data_from_buffer<T>(cmd_buf: &mut CommandBuffer, buffer: &Subbuffer<[T]>, dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()>
     where T: BufferContents + Sized {
 
         let copy_region = BufferImageCopy {
@@ -142,7 +142,7 @@ impl Texture {
         Ok(())
     }
 
-    pub fn load_image_from_data_staged<L, T>(cmd_buf: &mut CommandBuffer<L>, staging_buffer: &Subbuffer<[T]>, data: &[T], image: Arc<Image>) -> Result<()>
+    pub fn load_image_from_data_staged<T>(cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[T]>, data: &[T], image: Arc<Image>) -> Result<()>
     where T: BufferContents + Sized + Clone {
 
         GraphicsManager::upload_buffer_data_sized(staging_buffer, data)?;
@@ -151,7 +151,7 @@ impl Texture {
         Ok(())
     }
 
-    pub fn load_image_region_from_data_staged<L, T>(cmd_buf: &mut CommandBuffer<L>, staging_buffer: &Subbuffer<[T]>, data: &[T], dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()>
+    pub fn load_image_region_from_data_staged<T>(cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[T]>, data: &[T], dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()>
     where T: BufferContents + Sized + Clone {
 
         GraphicsManager::upload_buffer_data_sized(staging_buffer, data)?;
@@ -160,7 +160,7 @@ impl Texture {
         Ok(())
     }
 
-    pub fn load_image_from_file_staged<L>(cmd_buf: &mut CommandBuffer<L>, allocator: Arc<dyn MemoryAllocator>, staging_buffer: &Subbuffer<[u8]>, file_path: &str, usage: ImageUsage) -> Result<Arc<Image>> {
+    pub fn load_image_from_file_staged(cmd_buf: &mut CommandBuffer, allocator: Arc<dyn MemoryAllocator>, staging_buffer: &Subbuffer<[u8]>, file_path: &str, usage: ImageUsage) -> Result<Arc<Image>> {
 
         let mut buf = vec![];
         let info = Self::load_image_file(file_path, 0, &mut buf)?;
@@ -174,7 +174,7 @@ impl Texture {
         Ok(image)
     }
 
-    pub fn load_image_region_from_file_staged<L>(cmd_buf: &mut CommandBuffer<L>, staging_buffer: &Subbuffer<[u8]>, file_path: &str, dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()> {
+    pub fn load_image_region_from_file_staged(cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, file_path: &str, dst_image: Arc<Image>, dst_offset: [u32; 3], dst_extent: [u32; 3]) -> Result<()> {
 
         let mut buf = vec![];
         let info = Self::load_image_file(file_path, 0, &mut buf)?;
@@ -304,7 +304,7 @@ impl TextureAtlas {
         self.loading_ctx = None;
     }
 
-    pub fn load_texture_from_data<L>(&mut self, cmd_buf: &mut CommandBuffer<L>, key: &str, column: u32, row: u32, data: &[u8]) -> Result<()> {
+    pub fn load_texture_from_data<L>(&mut self, cmd_buf: &mut CommandBuffer, key: &str, column: u32, row: u32, data: &[u8]) -> Result<()> {
         let ctx = self.loading_ctx.as_mut().unwrap();
         let staging_buffer = ctx.staging_buffer.clone().slice(ctx.offset .. ctx.offset+ctx.stride);
         ctx.offset += ctx.stride;
@@ -316,7 +316,7 @@ impl TextureAtlas {
         Ok(())
     }
 
-    pub fn load_texture_from_file<L>(&mut self, cmd_buf: &mut CommandBuffer<L>, key: &str, column: u32, row: u32, file_path: &str) -> Result<()>{
+    pub fn load_texture_from_file(&mut self, cmd_buf: &mut CommandBuffer, key: &str, column: u32, row: u32, file_path: &str) -> Result<()>{
         let ctx = self.loading_ctx.as_mut().unwrap();
         let staging_buffer = ctx.staging_buffer.clone().slice(ctx.offset .. ctx.offset+ctx.stride);
         ctx.offset += ctx.stride;

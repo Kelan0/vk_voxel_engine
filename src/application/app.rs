@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::application::Ticker;
-use crate::core::PrimaryCommandBuffer;
+use crate::core::CommandBuffer;
 use crate::Engine;
 
 pub trait App {
@@ -9,9 +9,9 @@ pub trait App {
     
     fn init(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()>;
 
-    fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()>;
+    fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()>;
     
-    fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()>;
+    fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()>;
     
     fn shutdown(&mut self) {}
 

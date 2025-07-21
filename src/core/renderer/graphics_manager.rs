@@ -1,6 +1,6 @@
-use std::any::type_name;
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
+use crate::core::renderer::command_buffer::{CommandBuffer, CommandBufferType};
 use crate::{log_error_and_anyhow, log_error_and_throw};
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
@@ -9,10 +9,8 @@ use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::hash::{DefaultHasher, Hash};
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,13 +34,13 @@ use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::future::{FenceSignalFuture, JoinFuture, NowFuture};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
-use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary, VulkanObject};
+use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
-pub type CommandBuffer<L> = AutoCommandBufferBuilder<L>;
-pub type PrimaryCommandBuffer = CommandBuffer<PrimaryAutoCommandBuffer>;
-pub type SecondaryCommandBuffer = CommandBuffer<SecondaryAutoCommandBuffer>;
+// pub type CommandBuffer<L> = AutoCommandBufferBuilder<L>;
+// pub type PrimaryCommandBuffer = CommandBuffer<PrimaryAutoCommandBuffer>;
+// pub type SecondaryCommandBuffer = CommandBuffer<SecondaryAutoCommandBuffer>;
 
 pub type StandardMemoryAllocator = GenericMemoryAllocator<FreeListAllocator>;
 
@@ -254,7 +252,7 @@ impl QueueId {
 
 #[allow(clippy::large_enum_variant)]
 pub enum BeginFrameResult<E = anyhow::Error> {
-    Begin(PrimaryCommandBuffer),
+    Begin(CommandBuffer),
     Skip,
     Err(E)
 }
@@ -1211,6 +1209,8 @@ impl GraphicsManager {
             Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to allocate command buffer for begin_frame"))
         };
 
+        let mut cmd_buf = CommandBuffer::new(CommandBufferType::Primary(cmd_buf));
+
         // Begin frame stats measurement
         if let Err(err) = self.begin_frame_stats_query(&mut cmd_buf) {
             return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to begin PipelineStatistics query"))
@@ -1219,7 +1219,7 @@ impl GraphicsManager {
         BeginFrameResult::Begin(cmd_buf)
     }
 
-    pub fn present_frame(&mut self, mut cmd_buf: PrimaryCommandBuffer) -> Result<bool> {
+    pub fn present_frame(&mut self, mut cmd_buf: CommandBuffer) -> Result<bool> {
 
         self.state = Default::default();
 
@@ -1228,7 +1228,8 @@ impl GraphicsManager {
             .inspect_err(|_| error!("Failed to enf PipelineStatistics query"))?;
 
         // Finalize the command buffer
-        let cmd_buf = cmd_buf.build()?;
+        // cmd_buf.get().build()?;
+        let cmd_buf = cmd_buf.build_primary()?;
 
         let swapchain = self.swapchain()?.clone();
         let image_index = self.swapchain_info.current_image_idx;
@@ -1300,19 +1301,19 @@ impl GraphicsManager {
         Ok(())
     }
 
-    fn begin_frame_stats_query(&mut self, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    fn begin_frame_stats_query(&mut self, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         // Pipeline statistics
-        unsafe { cmd_buf.reset_query_pool(self.pipeline_stats_query_pool.clone(), 0..self.pipeline_stats_query_pool.query_count()) }
+        cmd_buf.reset_query_pool(self.pipeline_stats_query_pool.clone(), 0..self.pipeline_stats_query_pool.query_count())
             .inspect_err(|_| error!("Failed to reset query pool 0..{} for PipelineStatistics", self.pipeline_stats_query_pool.query_count()))?;
 
-        unsafe { cmd_buf.begin_query(self.pipeline_stats_query_pool.clone(), 0, QueryControlFlags::empty()) }
+        cmd_buf.begin_query(self.pipeline_stats_query_pool.clone(), 0, QueryControlFlags::empty())
             .inspect_err(|_| error!("Failed to begin query 0 for PipelineStatistics"))?;
 
 
         // Timestamp
         self.current_timestamp_query_index = 0;
-        unsafe { cmd_buf.reset_query_pool(self.timestamp_query_pool.clone(), 0..self.timestamp_query_pool.query_count()) }
+        cmd_buf.reset_query_pool(self.timestamp_query_pool.clone(), 0..self.timestamp_query_pool.query_count())
             .inspect_err(|_| error!("Failed to reset query pool 0..{} for Timestamp", self.timestamp_query_pool.query_count()))?;
 
         if self.write_timestamp(cmd_buf, PipelineStage::TopOfPipe).is_none() {
@@ -1326,7 +1327,7 @@ impl GraphicsManager {
 
     }
 
-    fn end_frame_stats_query(&mut self, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    fn end_frame_stats_query(&mut self, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         // Pipeline statistics
         cmd_buf.end_query(self.pipeline_stats_query_pool.clone(), 0)
@@ -1344,7 +1345,7 @@ impl GraphicsManager {
         Ok(())
     }
 
-    pub fn write_timestamp(&mut self, cmd_buf: &mut PrimaryCommandBuffer, stage: PipelineStage) -> Option<u32> {
+    pub fn write_timestamp(&mut self, cmd_buf: &mut CommandBuffer, stage: PipelineStage) -> Option<u32> {
 
         let query_index = self.current_timestamp_query_index;
         // debug_assert!(query_index < self.timestamp_query_pool.query_count());
@@ -1352,7 +1353,7 @@ impl GraphicsManager {
             return None;
         }
 
-        if unsafe { cmd_buf.write_timestamp(self.timestamp_query_pool.clone(), query_index, stage) }
+        if cmd_buf.write_timestamp(self.timestamp_query_pool.clone(), query_index, stage)
             .inspect_err(|err| error!("Failed to write timestamp query {} for BottomOfPipe: {:?}\n{:?}", query_index, err, err.source()))
             .is_err() {
             return None;
@@ -1551,15 +1552,16 @@ impl GraphicsManager {
         Ok(())
     }
     
-    pub fn begin_transfer_commands(&self) -> Result<PrimaryCommandBuffer>{
+    pub fn begin_transfer_commands(&self) -> Result<CommandBuffer>{
         let allocator = self.command_buffer_allocator();
         let queue_family_index = self.queue_details.transfer_queue_family_index.unwrap();
         let cmd_buf = AutoCommandBufferBuilder::primary(allocator, queue_family_index, CommandBufferUsage::OneTimeSubmit)?;
+        let cmd_buf = CommandBuffer::new(CommandBufferType::Primary(cmd_buf));
         Ok(cmd_buf)
     }
     
-    pub fn submit_transfer_commands(&self, cmd_buf: PrimaryCommandBuffer) -> Result<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> {
-        let cmd_buf = cmd_buf.build()?;
+    pub fn submit_transfer_commands(&self, cmd_buf: CommandBuffer) -> Result<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> {
+        let cmd_buf = cmd_buf.build_primary()?;
 
         let queue = self.transfer_queue();
         
@@ -1569,7 +1571,7 @@ impl GraphicsManager {
         Ok(fence)
     }
     
-    pub fn transition_image_layout<L>(_cmd_buf: PrimaryCommandBuffer, _image: Arc<Image>) {
+    pub fn transition_image_layout<L>(_cmd_buf: CommandBuffer, _image: Arc<Image>) {
         // ImageLayout::ShaderReadOnlyOptimal;
         // let barrier = ImageMemoryBarrier{
         //     

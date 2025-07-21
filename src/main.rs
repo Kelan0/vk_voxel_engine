@@ -5,7 +5,7 @@ mod util;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{AxisDirection, BaseVertex, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{AxisDirection, BaseVertex, CommandBuffer, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -216,7 +216,7 @@ impl App for TestGame {
         &mut self,
         ticker: &mut Ticker,
         engine: &mut Engine,
-        _cmd_buf: &mut PrimaryCommandBuffer,
+        _cmd_buf: &mut CommandBuffer,
     ) -> Result<()> {
         if engine
             .graphics
@@ -261,7 +261,7 @@ impl App for TestGame {
         &mut self,
         ticker: &mut Ticker,
         engine: &mut Engine,
-        _cmd_buf: &mut PrimaryCommandBuffer,
+        _cmd_buf: &mut CommandBuffer,
     ) -> Result<()> {
         if engine.graphics.state().first_frame() {
             debug!("FIRST FRAME!")

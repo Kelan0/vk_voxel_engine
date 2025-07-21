@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{Camera, CameraDataUBO, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, PrimaryCommandBuffer, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::core::{Camera, CameraDataUBO, CommandBuffer, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
@@ -16,7 +16,6 @@ use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
-use bevy_ecs::world::error::EntityMutableFetchError;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
@@ -304,7 +303,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         self.static_scene_changed = false;
 
@@ -352,7 +351,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    pub fn render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    pub fn render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         let viewport = engine.graphics.get_viewport();
 
@@ -574,7 +573,7 @@ impl SceneRenderer {
         transform.write_model_matrix(&mut object_data_buffer.model_matrix)
     }
 
-    fn draw_scene(&self, cmd_buf: &mut PrimaryCommandBuffer, _scene: &mut Scene) -> Result<()> {
+    fn draw_scene(&self, cmd_buf: &mut CommandBuffer, _scene: &mut Scene) -> Result<()> {
         let mut draw_commands = vec![];
 
         let mut first_instance = 0;

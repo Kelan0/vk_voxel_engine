@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
-use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
-use crate::core::{GraphicsManager, SceneRenderer};
+use crate::core::renderer::{BeginFrameResult};
+use crate::core::{CommandBuffer, GraphicsManager, SceneRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -144,7 +144,7 @@ impl Engine {
     fn pre_render(
         &mut self,
         ticker: &mut Ticker,
-        cmd_buf: &mut PrimaryCommandBuffer,
+        cmd_buf: &mut CommandBuffer,
     ) -> Result<()> {
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
             self.graphics.debug_print_ref_counts();
@@ -163,7 +163,7 @@ impl Engine {
         Ok(())
     }
 
-    fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut PrimaryCommandBuffer) -> Result<()> {
+    fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut CommandBuffer) -> Result<()> {
         let clear_values = vec![
             Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0])),
             Some(ClearValue::Depth(1.0))
