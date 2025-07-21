@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::{BeginFrameResult, PrimaryCommandBuffer};
@@ -150,6 +152,7 @@ impl Engine {
 
         // dirty hack ;)
         let self_ptr: *mut Self = self;
+        
 
         unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
@@ -185,6 +188,8 @@ impl Engine {
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
+
+        unsafe { self.scene.render(ticker, &mut *self_ptr) }?;
 
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 

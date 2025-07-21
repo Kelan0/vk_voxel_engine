@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
 use bevy_ecs::entity::Entity;
-use bevy_ecs::prelude::Added;
+use bevy_ecs::prelude::{Added, EntityWorldMut};
 use bevy_ecs::query::With;
 use foldhash::HashMap;
 use glam::{Vec2, Vec3};
@@ -16,6 +16,7 @@ use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
+use bevy_ecs::world::error::EntityMutableFetchError;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::device::Device;
@@ -35,7 +36,7 @@ use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPo
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
 
-#[derive(BufferContents, Vertex, Clone, PartialEq)]
+#[derive(BufferContents, Vertex, Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BaseVertex {
     #[format(R32G32B32_SFLOAT)]
@@ -389,12 +390,14 @@ impl SceneRenderer {
 
     fn check_changed_entities(&mut self, scene: &mut Scene) {
 
+        let mut static_scene_changed = false;
+        
         let mut static_batch = vec![];
         let mut dynamic_batch = vec![];
 
-        let mut query_added = scene.world.query_filtered::<(Entity, &mut RenderComponent<BaseVertex>), Added<RenderComponent<BaseVertex>>>();
+        let mut query_added = scene.ecs.query_filtered::<(Entity, &mut RenderComponent<BaseVertex>), Added<RenderComponent<BaseVertex>>>();
 
-        query_added.iter(&scene.world).for_each(|(entity, render_component)| {
+        query_added.iter(&scene.ecs).for_each(|(entity, render_component)| {
             match render_component.render_type {
                 RenderType::Static => static_batch.push((entity, StaticRenderComponentMarker {})),
                 RenderType::Dynamic => dynamic_batch.push((entity, DynamicRenderComponentMarker {}))
@@ -402,22 +405,34 @@ impl SceneRenderer {
         });
 
         if !static_batch.is_empty() {
-            debug!("{} Static RenderComponent entities were added - change tick: {:?} to {:?}", static_batch.len(), scene.world.last_change_tick(), scene.world.change_tick());
-            scene.world.insert_batch(static_batch);
+            // debug!("{} Static RenderComponent entities were added - change tick: {:?} to {:?}", static_batch.len(), scene.ecs.last_change_tick(), scene.ecs.change_tick());
+            scene.ecs.insert_batch(static_batch);
+            static_scene_changed = true;
+        }
+
+        if !dynamic_batch.is_empty() {
+            // debug!("{} Dynamic RenderComponent entities were added - change tick: {:?} to {:?}", dynamic_batch.len(), scene.ecs.last_change_tick(), scene.ecs.change_tick());
+            scene.ecs.insert_batch(dynamic_batch);
+        }
+
+        let query_removed: Vec<Entity> = scene.ecs.removed::<RenderComponent<BaseVertex>>().collect();
+        
+        for entity in query_removed {
+            if !static_scene_changed && scene.ecs.get::<StaticRenderComponentMarker>(entity).is_some() {
+                static_scene_changed = true;
+            }
+            _ = scene.ecs.get_entity_mut(entity).map(|mut entity| {
+                entity.remove::<(StaticRenderComponentMarker, DynamicRenderComponentMarker)>();
+            });
+                                                 
+            // scene.ecs.entity_mut(entity).remove::<(StaticRenderComponentMarker, DynamicRenderComponentMarker)>();
+        }
+        
+        if static_scene_changed {
             self.static_scene_changed = true;
             for resource in &mut self.resources {
                 resource.static_scene_changed = true;
             }
-        }
-
-        if !dynamic_batch.is_empty() {
-            debug!("{} Dynamic RenderComponent entities were added - change tick: {:?} to {:?}", dynamic_batch.len(), scene.world.last_change_tick(), scene.world.change_tick());
-            scene.world.insert_batch(dynamic_batch);
-        }
-
-        let query_removed: Vec<Entity> = scene.world.removed::<RenderComponent<BaseVertex>>().collect();
-        for entity in query_removed {
-            scene.world.entity_mut(entity).remove::<(StaticRenderComponentMarker, DynamicRenderComponentMarker)>();
         }
     }
 
@@ -443,7 +458,7 @@ impl SceneRenderer {
             return; // Do nothing.
         }
 
-        let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<StaticRenderComponentMarker>>();
+        let mut query = scene.ecs.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<StaticRenderComponentMarker>>();
 
         let start_index = 0;
 
@@ -456,8 +471,12 @@ impl SceneRenderer {
         // let iter = query.par_iter(&scene.world);
 
         // TODO: par_iter
-        query.iter(&scene.world).for_each(|(render_component, transform)| {
+        query.iter(&scene.ecs).for_each(|(render_component, transform)| {
 
+            if render_component.mesh().is_none() {
+                return; // continue
+            }
+            
             self.prepare_scene_object(index, render_component, transform);
             index += 1;
         });
@@ -474,7 +493,7 @@ impl SceneRenderer {
 
     fn prepare_dynamic_scene(&mut self, scene: &mut Scene) {
 
-        let mut query = scene.world.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<DynamicRenderComponentMarker>>();
+        let mut query = scene.ecs.query_filtered::<(&mut RenderComponent<BaseVertex>, &Transform), With<DynamicRenderComponentMarker>>();
 
         let start_index = self.static_object_count as usize;
 
@@ -485,8 +504,12 @@ impl SceneRenderer {
         let mut index: u32 = self.static_object_count;
 
         // TODO: par_iter
-        query.iter(&scene.world).for_each(|(render_component, transform)| {
-
+        query.iter(&scene.ecs).for_each(|(render_component, transform)| {
+            
+            if render_component.mesh().is_none() {
+                return; // continue
+            }
+            
             self.prepare_scene_object(index, render_component, transform);
             index += 1;
         });
@@ -510,7 +533,7 @@ impl SceneRenderer {
         }
 
         self.render_info.push(RenderInfo{
-            mesh: render_component.mesh.clone(),
+            mesh: render_component.mesh().unwrap().clone(),
             index
         });
 

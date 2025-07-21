@@ -1,3 +1,4 @@
+use std::any::type_name;
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
 use crate::{log_error_and_anyhow, log_error_and_throw};
@@ -11,8 +12,10 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
+use std::hash::{DefaultHasher, Hash};
 use std::io::Read;
 use std::sync::Arc;
+use std::time::Instant;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SecondaryAutoCommandBuffer};
@@ -33,7 +36,7 @@ use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::future::{FenceSignalFuture, JoinFuture, NowFuture};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
-use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary};
+use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary, VulkanObject};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -79,6 +82,7 @@ pub struct GraphicsManager {
     debug_pipeline_statistics: Option<DebugPipelineStatistics>,
     current_timestamp_query_index: u32,
     timestamp_query_results: Vec<u64>,
+    debug_time_blocked: f64,
 }
 
 #[derive(Default, Debug)]
@@ -310,6 +314,7 @@ impl GraphicsManager {
             wide_lines: true,
             pipeline_statistics_query: true,
             runtime_descriptor_array: true,
+            // buffer_device_address: true,
             // smooth_lines: true,
             // bresenham_lines: true,
             ..Default::default()
@@ -386,6 +391,7 @@ impl GraphicsManager {
             debug_pipeline_statistics: None,
             current_timestamp_query_index: 0,
             timestamp_query_results: vec![],
+            debug_time_blocked: 0.0,
         };
 
         renderer.set_resolution(width, height)?;
@@ -1056,6 +1062,8 @@ impl GraphicsManager {
             image_count = u32::min(image_count, max_image_count);
         }
 
+        info!("Initializing swapchain with {} buffers", image_count);
+
         let image_array_layers: u32 = 1;
 
         let mut image_usage = ImageUsage::COLOR_ATTACHMENT;
@@ -1141,7 +1149,10 @@ impl GraphicsManager {
         debug!("Device has {} references - Swapchain has {} references", Arc::strong_count(&self.device), swapchain_ref_count);
     }
 
+
     pub fn begin_frame(&mut self) -> BeginFrameResult {
+
+        self.debug_time_blocked = 0.0;
 
         // Check if swapchain recreation was requested...
         if self.update_swapchain_request.is_some() {
@@ -1166,15 +1177,16 @@ impl GraphicsManager {
             Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to acquire next image for begin_frame"))
         };
 
+        let a = Instant::now();
+
         // Wait for the current frame future to be finished before beginning the next frame
         if let Some(future) = &mut self.swapchain_info.in_flight_frames[image_index as usize] {
             future.cleanup_finished();
             future.wait(None).expect("Failed to wait on GPU Fence future");
         }
 
-        // This SHIT fucking code does not work... I hate it...
-        // We are waiting on the //previous// frame, not the current one, so the CPU will block until the previous frame is done.
-        // The ring buffer is completely fucking pointless here... aghhh
+        let b = Instant::now();
+        self.debug_time_blocked += b.duration_since(a).as_secs_f64();
 
 
         if is_suboptimal {
@@ -1460,6 +1472,9 @@ impl GraphicsManager {
         };
 
         let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
+
+        // debug!("create_staging_subbuffer for {len}x \"{}\" elements each {} bytes (buffer requires {} bytes) - buffer length is {} elements ({} bytes)", type_name::<T>(), size_of::<T>(), len * size_of::<T>() as DeviceSize, buffer.len(), buffer.len() * size_of::<T>() as DeviceSize);
+        // debug!("Underlying buffer is {} ({} bytes capacity, {} bytes offset, {} bytes size)", buffer.buffer().handle() as u64, buffer.buffer().size(), buffer.offset(), buffer.size());
         Ok(buffer)
     }
 
@@ -1680,6 +1695,10 @@ impl GraphicsManager {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    pub fn debug_time_blocked(&self) -> f64 {
+        self.debug_time_blocked
     }
 }
 

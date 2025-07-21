@@ -15,7 +15,7 @@ pub struct MeshConfiguration<V: Vertex> {
 
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Mesh<V: Vertex> {
     vertex_buffer: Subbuffer<[V]>,
     index_buffer: Option<Subbuffer<[u32]>>,

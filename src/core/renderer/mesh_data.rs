@@ -1,5 +1,6 @@
+use std::fmt::{Debug, Formatter};
 use crate::core::{CommandBuffer, Mesh, MeshConfiguration};
-use anyhow::Result;
+use anyhow::{Result};
 use glam::Vec3;
 use std::sync::Arc;
 use vulkano::memory::allocator::MemoryAllocator;
@@ -100,16 +101,17 @@ impl <V: Vertex + Default> MeshData<V> {
     }
     
     #[allow(clippy::too_many_arguments)] // grr >:(
-    pub fn create_quad_face(&mut self, pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2], left: [f32; 3], up: [f32; 3], offset: f32) -> u32
+    pub fn create_quad_face(&mut self, center: [f32; 3], pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2], left: [f32; 3], up: [f32; 3], offset: f32) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
         let up = Vec3::from_slice(&up);
         let left = Vec3::from_slice(&left);
         let normal = Vec3::cross(up, left);
+        let center = Vec3::from_slice(&center);
         
-        let pos_btm_left = left * pos_btm_left[0] + up * pos_btm_left[1] + normal * offset;
-        let pos_btm_right = left * pos_btm_right[0] + up * pos_btm_right[1] + normal * offset;
-        let pos_top_right = left * pos_top_right[0] + up * pos_top_right[1] + normal * offset;
-        let pos_top_left = left * pos_top_left[0] + up * pos_top_left[1] + normal * offset;
+        let pos_btm_left = center + left * pos_btm_left[0] + up * pos_btm_left[1] + normal * offset;
+        let pos_btm_right = center + left * pos_btm_right[0] + up * pos_btm_right[1] + normal * offset;
+        let pos_top_right = center + left * pos_top_right[0] + up * pos_top_right[1] + normal * offset;
+        let pos_top_left = center + left * pos_top_left[0] + up * pos_top_left[1] + normal * offset;
         
         let v00 = self.vertex().pos(pos_btm_left.into()).normal(normal.into()).get();
         let v01 = self.vertex().pos(pos_btm_right.into()).normal(normal.into()).get();
@@ -120,23 +122,26 @@ impl <V: Vertex + Default> MeshData<V> {
         idx
     }
     
-    pub fn create_box_face(&mut self, direction: AxisDirection, pos_min: [f32; 2], pos_max: [f32; 2], offset: f32) -> u32
+    pub fn create_box_face(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
+        let pos_min = [-half_size[0], -half_size[1]];
+        let pos_max = half_size;
+        
         match direction {
-            AxisDirection::NegX => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], offset),
-            AxisDirection::PosX => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], offset),
-            AxisDirection::NegY => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], offset),
-            AxisDirection::PosY => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], offset),
-            AxisDirection::NegZ => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
-            AxisDirection::PosZ => self.create_quad_face([pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
+            AxisDirection::NegX => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], offset),
+            AxisDirection::PosX => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], offset),
+            AxisDirection::NegY => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], offset),
+            AxisDirection::PosY => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], offset),
+            AxisDirection::NegZ => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
+            AxisDirection::PosZ => self.create_quad_face(center, [pos_min[0], pos_min[1]], [pos_max[0], pos_min[1]], [pos_max[0], pos_max[1]], [pos_min[0], pos_max[1]], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], offset),
         }
     }
     
-    pub fn create_box_face_textured(&mut self, direction: AxisDirection, pos_min: [f32; 2], pos_max: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
+    pub fn create_box_face_textured(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
         const FLIP_Y: bool = true;
-        let index = self.create_box_face(direction, pos_min, pos_max, offset);
+        let index = self.create_box_face(direction, center, half_size, offset);
         if FLIP_Y {
             self.texture_quad(index, [tex_min[0], tex_max[1]], [tex_max[0], tex_max[1]], [tex_max[0], tex_min[1]], [tex_min[0], tex_min[1]]);
         } else {
@@ -145,23 +150,23 @@ impl <V: Vertex + Default> MeshData<V> {
         index
     }
 
-    pub fn create_cuboid(&mut self, pos_min: [f32; 3], pos_max: [f32; 3]) -> u32
+    pub fn create_cuboid(&mut self, center: [f32; 3], half_size: [f32; 3]) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
         let index = 
-        self.create_box_face(AxisDirection::NegX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], -pos_min[0]);
-        self.create_box_face(AxisDirection::PosX, [pos_min[1], pos_min[2]], [pos_max[1], pos_max[2]], pos_max[0]);
-        self.create_box_face(AxisDirection::NegY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], -pos_min[1]);
-        self.create_box_face(AxisDirection::PosY, [pos_min[0], pos_min[2]], [pos_max[0], pos_max[2]], pos_max[1]);
-        self.create_box_face(AxisDirection::NegZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], -pos_min[2]);
-        self.create_box_face(AxisDirection::PosZ, [pos_min[0], pos_min[1]], [pos_max[0], pos_max[1]], pos_max[2]);
+        self.create_box_face(AxisDirection::NegX, center, [half_size[1], half_size[2]], half_size[0]);
+        self.create_box_face(AxisDirection::PosX, center, [half_size[1], half_size[2]], half_size[0]);
+        self.create_box_face(AxisDirection::NegY, center, [half_size[0], half_size[2]], half_size[1]);
+        self.create_box_face(AxisDirection::PosY, center, [half_size[0], half_size[2]], half_size[1]);
+        self.create_box_face(AxisDirection::NegZ, center, [half_size[0], half_size[1]], half_size[2]);
+        self.create_box_face(AxisDirection::PosZ, center, [half_size[0], half_size[1]], half_size[2]);
         index
     }
 
-    pub fn create_cuboid_textured(&mut self, pos_min: [f32; 3], pos_max: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
+    pub fn create_cuboid_textured(&mut self, center: [f32; 3], half_size: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
         
-        let index = self.create_cuboid(pos_min, pos_max);
+        let index = self.create_cuboid(center, half_size);
         
         self.texture_quad(index, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         self.texture_quad(index + 4, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
@@ -280,5 +285,24 @@ impl <V: Vertex> Default for MeshData<V> {
             vertices: vec![],
             indices: vec![],
         }
+    }
+}
+
+impl<V> Debug for MeshData<V>
+where V: Vertex + Debug {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MeshData{{\n\tvertices:[\n")?;
+        for (i, vertex) in self.vertices.iter().enumerate() {
+            write!(f, "\t\t[{i}] = {vertex:?}\n")?;
+        }
+        write!(f, "],\n\tindices:[\n\t\t")?;
+        for (i, index) in self.indices.iter().enumerate() {
+            if *index > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{index}")?;
+        }
+        write!(f, "\n\t]\n }}")?;
+        Ok(())
     }
 }

@@ -11,7 +11,7 @@ use application::ticker::Ticker;
 use application::App;
 use bevy_ecs::entity::Entity;
 use core::Engine;
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use log::{debug, error, info};
 use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
@@ -28,7 +28,8 @@ struct TestGame {
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
     debug_stats: Vec<TickProfileStatistics>,
 
-    test_mesh: Option<Arc<Mesh<BaseVertex>>>
+    test_mesh: Option<Arc<Mesh<BaseVertex>>>,
+    debug_time_blocked: f64,
 }
 
 impl TestGame {
@@ -41,6 +42,7 @@ impl TestGame {
             event_window_resized: None,
             debug_stats: vec![],
             test_mesh: None,
+            debug_time_blocked: 0.0,
         }
     }
 
@@ -72,21 +74,23 @@ impl TestGame {
 
         let mesh2 = self.test_mesh.as_ref().unwrap();
 
-        let render_component = RenderComponent::new(RenderType::Dynamic, mesh2.clone());
+        let render_component = RenderComponent::new(RenderType::Dynamic, Some(mesh2.clone()));
 
         scene.create_entity("TestEntity2")
             .add_component(render_component)
             .add_component(*Transform::new()
+                .rotate_y(f32::to_radians(30.0))
                 .translate(pos)
-                .rotate_local_z(f32::to_radians(30.0)))
+            )
             .add_component(UpdateComponent{
                 on_render: Box::new(|entity: Entity, ticker: &mut Ticker, engine: &mut Engine| {
-                    let mut entity = engine.scene.world.entity_mut(entity);
+                    let mut entity = engine.scene.ecs.entity_mut(entity);
                     entity.modify_component(|transform: &mut Transform| {
-                        transform.rotate_local_y(f64::to_radians(30.0 * ticker.delta_time()) as f32);
+                        transform.rotate_y(f64::to_radians(30.0 * ticker.delta_time()) as f32);
                     });
                 })
-            });
+            })
+        ;
     }
 }
 
@@ -131,12 +135,12 @@ impl App for TestGame {
 
         let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
         // mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);
-        mesh_data.create_box_face_textured(AxisDirection::NegX, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
-        mesh_data.create_box_face_textured(AxisDirection::PosX, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
-        mesh_data.create_box_face_textured(AxisDirection::NegY, [-0.5, -0.5], [0.5, 0.5], 0.5, c3[0], c3[1]);
-        mesh_data.create_box_face_textured(AxisDirection::PosY, [-0.5, -0.5], [0.5, 0.5], 0.5, c0[0], c0[1]);
-        mesh_data.create_box_face_textured(AxisDirection::NegZ, [-0.5, -0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
-        mesh_data.create_box_face_textured(AxisDirection::PosZ, [-0.5, -0.5], [0.5, 0.5], 0.5, c2[0], c2[1]);
+        mesh_data.create_box_face_textured(AxisDirection::NegX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::NegY, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c3[0], c3[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosY, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c0[0], c0[1]);
+        mesh_data.create_box_face_textured(AxisDirection::NegZ, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
+        mesh_data.create_box_face_textured(AxisDirection::PosZ, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c2[0], c2[1]);
 
         let mesh1 = Arc::new(mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf)?);
 
@@ -144,7 +148,7 @@ impl App for TestGame {
             .wait(None)?;
 
 
-        let render_component_1 = RenderComponent::new(RenderType::Static, mesh1)
+        let render_component_1 = RenderComponent::new(RenderType::Static, Some(mesh1))
             .with_material(Some(Material::new(texture_atlas.texture().clone())));
         
         self.create_test_mesh(allocator.clone())?;
@@ -152,7 +156,7 @@ impl App for TestGame {
         // engine.scene_renderer.add_mesh(mesh);
 
         let camera = engine.scene_renderer.camera_mut();
-        camera.set_perspective(70.0, 4.0 / 3.0, 0.01, 100.0);
+        camera.set_perspective(70.0, 4.0 / 3.0, 0.07, 2000.0);
         camera.set_position(Vec3::new(1.0, 0.0, -3.0));
 
         let num_x = 10;
@@ -166,8 +170,8 @@ impl App for TestGame {
                 engine.scene.create_entity("TestEntity1")
                     .add_component(render_component_1.clone())
                     .add_component(*Transform::new()
-                        .translate(Vec3::new(x, 0.0, z))
-                        .rotate_z(f32::to_radians(30.0)));
+                        .translate_global(Vec3::new(x, 0.0, z))
+                        .rotate_global_y(f32::to_radians(30.0)));
             }
         }
 
@@ -183,6 +187,28 @@ impl App for TestGame {
             }
         }
 
+        
+        // engine.scene.world.request_load_chunk(IVec3::new(0, 0, 0));
+        // engine.scene.world.request_load_chunk(IVec3::new(1, 0, 0));
+        // engine.scene.world.request_load_chunk(IVec3::new(0, 0, 1));
+        
+        
+        let pos = IVec3::new(40, 10, 2);
+        let r = 20;
+        for x in -r..=r {
+            let fx = x as f32;
+            for y in -r..=r {
+                let fy = y as f32;
+                for z in -r..=r {
+                    let fz = z as f32;
+                    let d2 = (fx * fx + fy * fy + fz * fz) as i32;
+                    if d2 < r * r {
+                        engine.scene.world.set_block(pos + IVec3::new(x, y, z), 1);
+                    }
+                }
+            }
+        }
+        
         Ok(())
     }
 
@@ -210,14 +236,17 @@ impl App for TestGame {
             camera.set_aspect_ratio(aspect_ratio);
         }
 
+        self.debug_time_blocked += engine.graphics.debug_time_blocked();
+
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
 
             let stats = ticker.calculate_profiling_statistics();
 
+            debug!("Blocked for {:.4} msec", self.debug_time_blocked * 1000.0);
             debug!("{stats:?}");
 
             self.debug_stats.push(stats);
-
+            self.debug_time_blocked = 0.0;
 
 
             if let Some(stats) = engine.graphics.debug_pipeline_statistics() {

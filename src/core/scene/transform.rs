@@ -24,12 +24,12 @@ impl Transform {
         Default::default()
     }
 
-    pub fn transform(&mut self, affine: Affine3A) -> &mut Transform {
+    pub fn transform_global(&mut self, affine: Affine3A) -> &mut Transform {
         self.affine = affine * self.affine;
         self
     }
 
-    pub fn transform_local(&mut self, affine: Affine3A) -> &mut Transform {
+    pub fn transform(&mut self, affine: Affine3A) -> &mut Transform {
         self.affine *= affine;
         self
     }
@@ -43,11 +43,22 @@ impl Transform {
         self.set_translation_a(translation.into())
     }
 
+    pub fn translate_global_a(&mut self, translation: Vec3A) -> &mut Self {
+        self.transform_global(Affine3A {
+            matrix3: Mat3A::IDENTITY,
+            translation,
+        })
+    }
+
     pub fn translate_a(&mut self, translation: Vec3A) -> &mut Self {
         self.transform(Affine3A {
             matrix3: Mat3A::IDENTITY,
             translation,
         })
+    }
+
+    pub fn translate_global(&mut self, translation: Vec3) -> &mut Self {
+        self.translate_global_a(translation.into())
     }
 
     pub fn translate(&mut self, translation: Vec3) -> &mut Self {
@@ -64,7 +75,7 @@ impl Transform {
     }
 
     pub fn rotate_mat_a(&mut self, rotation: Mat3A) -> &mut Self {
-        self.transform(Affine3A {
+        self.transform_global(Affine3A {
             matrix3: rotation,
             translation: Vec3A::ZERO,
         })
@@ -80,15 +91,36 @@ impl Transform {
     }
 
     pub fn rotate_quat(&mut self, rotation: Quat) -> &mut Self {
-        self.transform(Affine3A {
+        self.transform_global(Affine3A {
             matrix3: Mat3A::from_quat(rotation),
             translation: Vec3A::ZERO,
         })
     }
 
     pub fn rotate_axis_angle(&mut self, axis: Vec3, angle: f32) -> &mut Self {
-        self.transform(Affine3A {
+        self.transform_global(Affine3A {
             matrix3: Mat3A::from_axis_angle(axis, angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_global_x(&mut self, angle: f32) -> &mut Self {
+        self.transform_global(Affine3A {
+            matrix3: Mat3A::from_rotation_x(angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_global_y(&mut self, angle: f32) -> &mut Self {
+        self.transform_global(Affine3A {
+            matrix3: Mat3A::from_rotation_y(angle),
+            translation: Vec3A::ZERO,
+        })
+    }
+
+    pub fn rotate_global_z(&mut self, angle: f32) -> &mut Self {
+        self.transform_global(Affine3A {
+            matrix3: Mat3A::from_rotation_z(angle),
             translation: Vec3A::ZERO,
         })
     }
@@ -109,28 +141,7 @@ impl Transform {
 
     pub fn rotate_z(&mut self, angle: f32) -> &mut Self {
         self.transform(Affine3A {
-            matrix3: Mat3A::from_rotation_y(angle),
-            translation: Vec3A::ZERO,
-        })
-    }
-
-    pub fn rotate_local_x(&mut self, angle: f32) -> &mut Self {
-        self.transform_local(Affine3A {
-            matrix3: Mat3A::from_rotation_x(angle),
-            translation: Vec3A::ZERO,
-        })
-    }
-
-    pub fn rotate_local_y(&mut self, angle: f32) -> &mut Self {
-        self.transform_local(Affine3A {
-            matrix3: Mat3A::from_rotation_y(angle),
-            translation: Vec3A::ZERO,
-        })
-    }
-
-    pub fn rotate_local_z(&mut self, angle: f32) -> &mut Self {
-        self.transform_local(Affine3A {
-            matrix3: Mat3A::from_rotation_y(angle),
+            matrix3: Mat3A::from_rotation_z(angle),
             translation: Vec3A::ZERO,
         })
     }

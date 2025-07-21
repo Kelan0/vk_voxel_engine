@@ -4,9 +4,11 @@ use anyhow::Result;
 use bevy_ecs::bundle::Bundle;
 use bevy_ecs::component::Component;
 use bevy_ecs::world::{EntityWorldMut, World};
+use crate::core::world::VoxelWorld;
 
 pub struct Scene {
-    pub world: World,
+    pub ecs: World,
+    pub world: VoxelWorld,
 }
 
 #[derive(Component)]
@@ -39,8 +41,10 @@ impl <'a> Entity<'a> {
 
 impl Scene {
     pub fn new() -> Result<Self> {
-        let world = World::new();
+        let ecs = World::new();
+        let world = VoxelWorld::new();
         Ok(Scene {
+            ecs,
             world
         })
     }
@@ -50,7 +54,7 @@ impl Scene {
             name: name.to_string()
         };
 
-        let entity = self.world.spawn(name_component);
+        let entity = self.ecs.spawn(name_component);
         Entity{
             id: entity,
             // scene: self
@@ -59,11 +63,11 @@ impl Scene {
     
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         // let r = self.world.increment_change_tick();
-        self.world.clear_trackers();
+        self.ecs.clear_trackers();
 
-        let mut query = self.world.query::<(bevy_ecs::entity::Entity, &mut UpdateComponent)>();
+        let mut query = self.ecs.query::<(bevy_ecs::entity::Entity, &mut UpdateComponent)>();
 
-        query.iter(&self.world).for_each(|(entity, update_component)| {
+        query.iter(&self.ecs).for_each(|(entity, update_component)| {
             let on_render = &update_component.on_render;
             on_render(entity, ticker, engine);
         });
@@ -73,6 +77,23 @@ impl Scene {
         //     on_render(entity, ticker, engine);
         // }
         
+        self.world.update_player_position(engine.scene_renderer.camera().position());
+        
         Ok(())
+    }
+
+    pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+
+        self.world.update(engine)?;
+
+        Ok(())
+    }
+
+    pub fn world(&self) -> &VoxelWorld {
+        &self.world
+    }
+
+    pub fn world_mut(&mut self) -> &mut VoxelWorld {
+        &mut self.world
     }
 }
