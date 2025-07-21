@@ -18,7 +18,7 @@ use std::mem;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::device::Device;
+use vulkano::device::{Device, DeviceOwnedVulkanObject};
 use vulkano::format::Format;
 use vulkano::image::sampler::Sampler;
 use vulkano::image::view::ImageView;
@@ -1015,6 +1015,7 @@ impl SceneRenderer {
         let mut cmd_buf = graphics.begin_transfer_commands()?;
         
         let staging_buffer = GraphicsManager::create_staging_subbuffer::<u8>(allocator.clone(), data.len() as DeviceSize)?;
+        staging_buffer.buffer().set_debug_utils_object_name(Some("SceneRenderer-CreateNullTexture-StagingBuffer"))?;
         let image_view = Texture::create_image_view_2d(allocator, width, height, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST)?;
 
         Texture::load_image_from_data_staged(&mut cmd_buf, &staging_buffer, &data, image_view.image().clone())?;

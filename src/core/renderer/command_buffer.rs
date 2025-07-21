@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
@@ -224,6 +225,7 @@ impl CommandBufferImpl for VulkanoCommandBuffer {
 pub struct AshCommandBuffer {
     device: ash::Device,
     cmd_buf: vk::CommandBuffer,
+    resources: Vec<Arc<dyn Any>>
 }
 
 impl AshCommandBuffer {
@@ -238,7 +240,8 @@ impl AshCommandBuffer {
 
         AshCommandBuffer {
             device,
-            cmd_buf
+            cmd_buf,
+            resources: vec![]
         }
     }
     
@@ -248,6 +251,10 @@ impl AshCommandBuffer {
     
     pub fn handle(&self) -> &vk::CommandBuffer {
         &self.cmd_buf
+    }
+    
+    fn add_resource(&mut self, resource: Arc<dyn Any>) {
+        self.resources.push(resource);
     }
 }
 
@@ -303,6 +310,8 @@ impl CommandBufferImpl for AshCommandBuffer {
                 .image_extent(Extent3D{ width: image_copy.image_extent[0], height: image_copy.image_extent[1], depth: image_copy.image_extent[2] });
         }
         unsafe { self.device.cmd_copy_buffer_to_image(self.cmd_buf, src_buffer, dst_image, dst_image_layout, &regions) };
+        self.add_resource(copy_buffer_to_image_info.src_buffer.buffer().clone());
+        self.add_resource(copy_buffer_to_image_info.dst_image.clone());
         Ok(())
     }
 
@@ -317,6 +326,8 @@ impl CommandBufferImpl for AshCommandBuffer {
                 .size(buffer_copy.size)
         }
         unsafe { self.device.cmd_copy_buffer(self.cmd_buf, src_buffer, dst_buffer, &regions) };
+        self.add_resource(copy_buffer_info.src_buffer.buffer().clone());
+        self.add_resource(copy_buffer_info.dst_buffer.buffer().clone());
         Ok(())
     }
 

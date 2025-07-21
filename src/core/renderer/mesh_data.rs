@@ -1,9 +1,13 @@
 use std::fmt::{Debug, Formatter};
-use crate::core::{CommandBuffer, Mesh, MeshConfiguration};
+use crate::core::{CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
 use anyhow::{Result};
 use glam::Vec3;
 use std::sync::Arc;
-use vulkano::memory::allocator::MemoryAllocator;
+use ash::vk::DeviceSize;
+use vulkano::buffer::Subbuffer;
+use vulkano::device::DeviceOwnedVulkanObject;
+use vulkano::memory::allocator::{align_up, MemoryAllocator};
+use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
 
 #[derive(Clone, PartialEq)]
@@ -70,13 +74,52 @@ impl <V: Vertex> MeshData<V> {
         Ok(mesh)
     }
     
-    pub fn build_mesh_staged(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer) -> Result<Mesh<V>> {
-        let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, MeshConfiguration {
+    pub fn build_mesh_staged(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>) -> Result<Mesh<V>> {
+        let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, staging_buffer, MeshConfiguration {
             vertices: self.vertices,
             indices: Some(self.indices),
         })?;
         
         Ok(mesh)
+    }
+    
+    pub fn get_required_vertex_buffer_size(&self) -> DeviceSize {
+        Self::calc_required_vertex_buffer_size(self.vertices.len())
+    }
+    
+    pub fn get_required_index_buffer_size(&self) -> DeviceSize {
+        Self::calc_required_index_buffer_size(self.indices.len())
+    }
+    
+    pub fn get_required_staging_buffer_size(&self) -> DeviceSize {
+        self.get_required_vertex_buffer_size() + self.get_required_index_buffer_size()
+    }
+    
+    pub fn create_staging_buffer(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Subbuffer<[u8]>>{
+        let required_len = self.get_required_staging_buffer_size();
+        let buf = GraphicsManager::create_staging_subbuffer(allocator, required_len)?;
+        buf.buffer().set_debug_utils_object_name(Some("MeshData-StagingBuffer"))?;
+        Ok(buf)
+    }
+    
+    pub fn calc_required_vertex_buffer_size(vertex_count: usize) -> DeviceSize {
+        let size = (vertex_count * size_of::<V>()) as DeviceSize;
+        
+        if let Some(alignment) = DeviceAlignment::new(align_of::<V>() as DeviceSize) {
+            align_up(size, alignment)
+        } else {
+            size
+        }
+    }
+    
+    pub fn calc_required_index_buffer_size(index_count: usize) -> DeviceSize {
+        let size = (index_count * size_of::<u32>()) as DeviceSize;
+        
+        if let Some(alignment) = DeviceAlignment::new(align_of::<u32>() as DeviceSize) {
+            align_up(size, alignment)
+        } else {
+            size
+        }
     }
 }
 

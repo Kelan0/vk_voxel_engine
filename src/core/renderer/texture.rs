@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use vulkano::buffer::{BufferContents, Subbuffer};
 use vulkano::command_buffer::{BufferImageCopy, CopyBufferToImageInfo};
-use vulkano::device::{Device, DeviceOwned};
+use vulkano::device::{Device, DeviceOwned, DeviceOwnedVulkanObject};
 use vulkano::format::Format;
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, LOD_CLAMP_NONE};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
@@ -278,16 +278,16 @@ impl TextureAtlas {
 
         Ok(texture_atlas)
     }
-
-    pub fn begin_loading(&mut self, allocator: Arc<dyn MemoryAllocator>, staging_buffer: Option<Subbuffer<[u8]>>) -> Result<()> {
-        debug_assert_eq!(self.loading_ctx, None);
-
+    
+    pub fn create_staging_buffer(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Subbuffer<[u8]>> {
         let required_len = (self.atlas_width * self.atlas_height * 4) as DeviceSize;
+        let buf = GraphicsManager::create_staging_subbuffer(allocator, required_len)?;
+        buf.buffer().set_debug_utils_object_name(Some("TextureAtlas-StagingBuffer"))?;
+        Ok(buf)
+    }
 
-        let staging_buffer = match staging_buffer {
-            Some(buf) if buf.len() >= required_len => { buf },
-            _ => { GraphicsManager::create_staging_subbuffer(allocator, required_len)? },
-        };
+    pub fn begin_loading(&mut self, staging_buffer: Subbuffer<[u8]>) -> Result<()> {
+        debug_assert_eq!(self.loading_ctx, None);
 
         let stride = (self.texture_size * self.texture_size * 4) as DeviceSize;
         

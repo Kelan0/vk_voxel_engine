@@ -17,6 +17,7 @@ use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
 use std::fs;
 use std::sync::Arc;
+use vulkano::device::DeviceOwnedVulkanObject;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 
@@ -115,13 +116,13 @@ impl App for TestGame {
 
         let allocator = engine.graphics.memory_allocator();
         
-        let buffer = GraphicsManager::create_staging_subbuffer::<u8>(allocator.clone(), 512 * 512 * 4)?;
 
         let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
 
         let mut texture_atlas = TextureAtlas::new(allocator.clone(), 16, 4, 4, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST)?;
 
-        texture_atlas.begin_loading(allocator.clone(), Some(buffer.clone()))?;
+        let tex_staging_buffer = texture_atlas.create_staging_buffer(allocator.clone())?;
+        texture_atlas.begin_loading(tex_staging_buffer.clone())?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_top", 0, 0, "res/textures/blocks/crafting_table_top.png")?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_side", 1, 0, "res/textures/blocks/crafting_table_side.png")?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_front", 0, 1, "res/textures/blocks/crafting_table_front.png")?;
@@ -142,7 +143,8 @@ impl App for TestGame {
         mesh_data.create_box_face_textured(AxisDirection::NegZ, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
         mesh_data.create_box_face_textured(AxisDirection::PosZ, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c2[0], c2[1]);
 
-        let mesh1 = Arc::new(mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf)?);
+        let mesh_staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
+        let mesh1 = Arc::new(mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &mesh_staging_buffer)?);
 
         engine.graphics.submit_transfer_commands(cmd_buf)?
             .wait(None)?;

@@ -3,11 +3,14 @@ pub mod world {
     use std::collections::VecDeque;
     use std::sync::Arc;
     use anyhow::Result;
+    use ash::vk::DeviceSize;
     use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
     use glam::{IVec3, UVec3, Vec3};
     use log::debug;
+    use vulkano::buffer::Subbuffer;
     use vulkano::memory::allocator::MemoryAllocator;
-    use crate::core::{BaseVertex, CommandBuffer, Engine, Entity, Mesh, MeshData, RenderComponent, RenderType, Transform};
+    use crate::core::{BaseVertex, CommandBuffer, Engine, Entity, GraphicsManager, Mesh, MeshData, RenderComponent, RenderType, Transform};
+    use crate::core::util::util::chop_buffer_at;
 
     pub const CHUNK_SIZE_EXP: u32 = 5;
     pub const CHUNK_SIZE: u32 = 1 << CHUNK_SIZE_EXP;
@@ -35,6 +38,7 @@ pub mod world {
         chunk_pos: IVec3,
         blocks: [u32; CHUNK_BLOCK_COUNT],
         dirty: bool,
+        updated_mesh_data: Option<MeshData<BaseVertex>>,
         mesh: Option<Arc<Mesh<BaseVertex>>>
     }
 
@@ -57,7 +61,7 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 20,
+                chunk_load_radius: 0,
             }
         }
 
@@ -65,16 +69,29 @@ pub mod world {
             self.update_requested_chunks();
             self.update_chunk_load_queue(engine);
 
-            let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
+            let mut staging_size = 0;
 
             for (_chunk_pos, chunk) in &mut self.loaded_chunks {
                 // let chunk = &mut self.chunks[*index];
-                chunk.update(&mut cmd_buf, engine)?;
+                chunk.update_mesh_data()?;
+                staging_size += chunk.get_staging_buffer_size();
             }
 
-            engine.graphics.submit_transfer_commands(cmd_buf)?
-                .wait(None)?;
+            if staging_size > 0 {
+                let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
 
+                let allocator = engine.graphics.memory_allocator();
+                
+                let mut staging_buffer = GraphicsManager::create_staging_subbuffer(allocator, staging_size)?;
+                let mut subbuffer = Some(staging_buffer.clone());
+
+                for (_chunk_pos, chunk) in &mut self.loaded_chunks {
+                    chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
+                }
+
+                engine.graphics.submit_transfer_commands(cmd_buf)?
+                    .wait(None)?;
+            }
             Ok(())
         }
 
@@ -325,6 +342,7 @@ pub mod world {
                 chunk_pos,
                 blocks: [0; CHUNK_BLOCK_COUNT],
                 dirty: true,
+                updated_mesh_data: None,
                 mesh: None,
             }
         }
@@ -352,11 +370,9 @@ pub mod world {
             }
         }
 
-        fn update(&mut self, cmd_buf: &mut CommandBuffer, engine: &mut Engine) -> Result<()> {
+        fn update_mesh_data(&mut self) -> Result<()> {
             if self.dirty {
                 self.dirty = false;
-
-                let allocator = engine.graphics.memory_allocator();
 
                 let mut mesh_data = MeshData::<BaseVertex>::new();
 
@@ -380,16 +396,37 @@ pub mod world {
                     }
                 }
 
-                let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf)?);
+                self.updated_mesh_data = Some(mesh_data);
+            }
+
+            Ok(())
+        }
+        
+        fn get_staging_buffer_size(&self) -> DeviceSize {
+            if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
+                mesh_data.get_required_staging_buffer_size()
+            } else {
+                0
+            }
+        }
+        
+        fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
+            let staging_size = self.get_staging_buffer_size();
+            if let Some(mesh_data) = self.updated_mesh_data.take() {
+
+                let allocator = engine.graphics.memory_allocator();
+
+                let staging_buffer = chop_buffer_at(staging_buffer, staging_size).unwrap();
+                
+                let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
 
                 engine.scene.ecs.modify_component(self.entity_id, |render_component: &mut RenderComponent<BaseVertex>| {
                     render_component.mesh = Some(mesh.clone());
                 })?;
 
                 self.mesh = Some(mesh);
-                // debug!("Created mesh for chunk");
             }
-
+            
             Ok(())
         }
 

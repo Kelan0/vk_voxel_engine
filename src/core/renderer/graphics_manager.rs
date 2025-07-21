@@ -19,11 +19,11 @@ use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferBeginInfo, CommandBufferExecFuture, CommandBufferLevel, CommandBufferSubmitInfo, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RecordingCommandBuffer, SecondaryAutoCommandBuffer, SemaphoreSubmitInfo, SubmitInfo};
+use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
+use vulkano::command_buffer::{CommandBufferExecFuture, CommandBufferLevel, CommandBufferSubmitInfo, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RecordingCommandBuffer, SecondaryAutoCommandBuffer, SemaphoreSubmitInfo, SubmitInfo};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwnedVulkanObject, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
 use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
@@ -37,10 +37,11 @@ use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentRe
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
 use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::fence::{Fence, FenceCreateFlags, FenceCreateInfo};
-use vulkano::sync::future::{FenceSignalFuture, JoinFuture, NowFuture};
+use vulkano::sync::future::{FenceSignalFuture, JoinFuture};
 use vulkano::sync::semaphore::{Semaphore, SemaphoreCreateInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary, VulkanObject};
+use crate::core::util::util::get_raw_bytes;
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -86,6 +87,7 @@ pub struct GraphicsManager {
     max_concurrent_frames: usize,
     current_frame_index: usize,
     state: State,
+    debug_pipeline_statistics_enabled: bool,
     debug_pipeline_statistics: Option<DebugPipelineStatistics>,
     current_timestamp_query_index: u32,
     timestamp_query_results: Vec<u64>,
@@ -412,6 +414,7 @@ impl GraphicsManager {
             max_concurrent_frames: 3,
             current_frame_index: 0,
             state: Default::default(),
+            debug_pipeline_statistics_enabled: false,
             debug_pipeline_statistics: None,
             current_timestamp_query_index: 0,
             timestamp_query_results: vec![],
@@ -982,8 +985,11 @@ impl GraphicsManager {
     fn create_swapchain_image_views(&mut self) -> Result<()> {
         self.swapchain_info.image_views = vec![];
 
-        for image in &self.swapchain_info.images {
+        for (i, image) in self.swapchain_info.images.iter().enumerate() {
+            image.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-ColourImage({i})").as_str()))?;
+
             let image_view_colour = ImageView::new_default(image.clone())?;
+            image_view_colour.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-ColourImageView({i})").as_str()))?;
             
             let depth_image_create_info = ImageCreateInfo{
                 image_type: ImageType::Dim2d,
@@ -998,6 +1004,7 @@ impl GraphicsManager {
             };
             
             let depth_image = Image::new(self.memory_allocator.clone(), depth_image_create_info, allocation_info)?;
+            depth_image.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-DepthImage({i})").as_str()))?;
             
             let depth_image_view_create_info = ImageViewCreateInfo{
                 view_type: ImageViewType::Dim2d,
@@ -1008,6 +1015,7 @@ impl GraphicsManager {
             };
             
             let image_view_depth = ImageView::new(depth_image.clone(), depth_image_view_create_info)?;
+            image_view_depth.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-DepthImageView({i})").as_str()))?;
 
             self.swapchain_info.image_views.push((image_view_colour, image_view_depth));
         }
@@ -1020,7 +1028,7 @@ impl GraphicsManager {
 
         self.swapchain_info.framebuffers.clear();
 
-        for (colour_image_view, depth_image_view) in &self.swapchain_info.image_views {
+        for (i, (colour_image_view, depth_image_view)) in self.swapchain_info.image_views.iter().enumerate() {
 
             let create_info = FramebufferCreateInfo{
                 attachments: vec![colour_image_view.clone(), depth_image_view.clone()],
@@ -1030,6 +1038,7 @@ impl GraphicsManager {
             };
 
             let framebuffer = Framebuffer::new(render_pass.clone(), create_info)?;
+            framebuffer.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-Framebuffer({i})",).as_str()))?;
 
             self.swapchain_info.framebuffers.push(framebuffer);
         }
@@ -1140,6 +1149,8 @@ impl GraphicsManager {
         let (swapchain, images) = Swapchain::new(self.device.clone(), self.surface.clone(), create_info)
             .inspect_err(|err| error!("Failed to create Vulkan swapchain: {err}"))?;
 
+        swapchain.set_debug_utils_object_name(Some("GraphicsManager-Swapchain"))?;
+
         self.swapchain_info.in_flight_frames.resize_with(images.len(), || {
             // sync::now(self.device.clone())
             None
@@ -1202,168 +1213,167 @@ impl GraphicsManager {
 
 
     pub fn begin_frame(&mut self) -> BeginFrameResult {
-    
+
         self.debug_time_blocked = 0.0;
-    
+
         // Check if swapchain recreation was requested...
         if self.update_swapchain_request.is_some() {
             if let Err(err) = self.recreate_swapchain() {
                 error!("Failed to recreate Swapchain");
                 return BeginFrameResult::Err(err);
             }
-    
+
             return BeginFrameResult::Skip;
         }
-    
+
         let swapchain = self.swapchain().expect("Failed to get swapchain").handle();
-    
+
         let current_frame_index = self.current_frame_index();
         let image_available_semaphore = self.swapchain_info.image_available_semaphores[current_frame_index].handle();
         let frame_fence = self.swapchain_info.frame_complete_fences[current_frame_index].clone();
-    
+
         frame_fence.wait(None).expect("Failed to wait on GPU Fence future");
-    
+
         _ = unsafe { frame_fence.reset() };
-    
+
         // ==== ACQUIRE THE NEXT IMAGE ====
-    
+
         let acquire_info = AcquireNextImageInfoKHR::default()
             .swapchain(swapchain)
             .device_mask(1)
             .timeout(u64::MAX)
             .semaphore(image_available_semaphore)
             .fence(vk::Fence::null());
-    
+
         let (image_index, is_suboptimal) = match unsafe { self.swapchain_loader.acquire_next_image2(&acquire_info) } {
             Ok(result) => result,
             Err(err) => {
                 return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to acquire next image for begin_frame"))
             }
         };
-    
+
         let a = Instant::now();
-    
+
         // Wait for the current frame future to be finished before beginning the next frame
         if let Some(future) = &mut self.swapchain_info.in_flight_frames[image_index as usize] {
             future.cleanup_finished();
             future.wait(None).expect("Failed to wait on GPU Fence future");
         }
-    
+
         let b = Instant::now();
         self.debug_time_blocked += b.duration_since(a).as_secs_f64();
-    
-    
+
+
         if is_suboptimal {
             // Swapchain will be recreated next time
             self.request_recreate_swapchain();
         }
-    
-    
+
+
         // Store the acquire_next_image future and index for later use in present_frame
         self.swapchain_info.prev_image_idx = self.swapchain_info.current_image_idx;
         self.swapchain_info.current_image_idx = image_index;
-    
+
         // Get the command buffer from the pool for this frame
         let allocator = self.command_buffer_allocator.clone();
         let queue_family_index = self.queue_details.graphics_queue_family_index.unwrap();
-        
-        
+
+
         // USE ASH COMMAND BUFFERS
         let mut cmd_buf = AshCommandBuffer::new(self.ash_device.clone(), self.get_graphics_command_pool().clone(), vk::CommandBufferLevel::PRIMARY);
         if let Err(err) = cmd_buf.begin(CommandBufferUsage::MultipleSubmit) {
             return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to begin CommandBuffer for begin_frame()"))
         }
-    
+
         // USE VULKANO COMMAND BUFFERS
         // let cmd_buf = match AutoCommandBufferBuilder::primary(allocator.clone(), queue_family_index, CommandBufferUsage::MultipleSubmit) {
         //     Ok(r) => r,
         //     Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to allocate command buffer for begin_frame"))
         // };
         // let mut cmd_buf = CommandBuffer::new(VulkanoCommandBufferType::Primary(cmd_buf));
-    
+
         // Begin frame stats measurement
         if let Err(err) = self.begin_frame_stats_query(&mut cmd_buf) {
             return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to begin PipelineStatistics query"))
         }
-    
+
         BeginFrameResult::Begin(cmd_buf)
     }
-    
+
     pub fn present_frame(&mut self, mut cmd_buf: CommandBuffer) -> Result<bool> {
-    
+
         self.state = Default::default();
-    
+
         // End frame stats measurement
         self.end_frame_stats_query(&mut cmd_buf)
             .inspect_err(|_| error!("Failed to enf PipelineStatistics query"))?;
-    
+
         // Finalize the command buffer
         // let cmd_buf = cmd_buf.build_primary()?;
         cmd_buf.end()?;
-        
+
         let cmd_buf = cmd_buf.handle();
-        
-    
+
         let swapchain = self.swapchain()?.handle();
         let image_index = self.swapchain_info.current_image_idx;
-    
+
         let mut queue = self.queue(QueueId::GraphicsMain.name())
             .ok_or_else(|| anyhow!("Failed to get the GRAPHICS queue \"{}\"", QueueId::GraphicsMain.name()))?;
-    
+
         // let present_info = SwapchainPresentInfo::swapchain_image_index(swapchain, image_index);
-    
+
         let current_frame_index = self.current_frame_index();
         let image_available_semaphore = self.swapchain_info.image_available_semaphores[current_frame_index].handle();
         let render_finished_semaphore = self.swapchain_info.render_finished_semaphores[current_frame_index].handle();
         let frame_complete_fence = self.swapchain_info.frame_complete_fences[current_frame_index].handle();
-    
+
         let wait_stages = [ vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT ];
-    
+
         let submit_infos = [ vk::SubmitInfo::default()
             .wait_semaphores(slice::from_ref(&image_available_semaphore))
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(slice::from_ref(&cmd_buf))
             .signal_semaphores(slice::from_ref(&render_finished_semaphore)) ];
-    
+
         unsafe { self.ash_device.queue_submit(queue.handle(), &submit_infos, frame_complete_fence) }?;
-    
+
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(slice::from_ref(&render_finished_semaphore))
             .swapchains(slice::from_ref(&swapchain))
             .image_indices(slice::from_ref(&image_index));
-    
+
         unsafe { self.swapchain_loader.queue_present(queue.handle(), &present_info) }?;
-    
+
         self.read_frame_stats_query_results()?;
-    
+
         let current_frame_index = self.swapchain_info.current_image_idx as usize;
-    
+
         // Increment the ring buffer for the next
         self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
         // // info!("begin_frame for next frame {}, image index {} -> {}", self.current_frame_index, self.swapchain_info.current_image_idx, image_index);
-    
+
         Ok(true)
     }
 
 
     // pub fn begin_frame(&mut self) -> BeginFrameResult {
-    // 
+    //
     //     self.debug_time_blocked = 0.0;
-    // 
+    //
     //     // Check if swapchain recreation was requested...
     //     if self.update_swapchain_request.is_some() {
     //         if let Err(err) = self.recreate_swapchain() {
     //             error!("Failed to recreate Swapchain");
     //             return BeginFrameResult::Err(err);
     //         }
-    // 
+    //
     //         return BeginFrameResult::Skip;
     //     }
-    // 
+    //
     //     let swapchain = self.swapchain().expect("Failed to get swapchain");
-    // 
+    //
     //     // ==== ACQUIRE THE NEXT IMAGE ====
-    // 
+    //
     //     let (image_index, is_suboptimal, acquire_future) = match swapchain::acquire_next_image(swapchain.clone(), None) {
     //         Ok(r) => r,
     //         Err(Validated::Error(VulkanError::OutOfDate)) => {
@@ -1372,85 +1382,85 @@ impl GraphicsManager {
     //         }
     //         Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to acquire next image for begin_frame"))
     //     };
-    // 
+    //
     //     let a = Instant::now();
-    // 
+    //
     //     // Wait for the current frame future to be finished before beginning the next frame
     //     if let Some(future) = &mut self.swapchain_info.in_flight_frames[image_index as usize] {
     //         future.cleanup_finished();
     //         future.wait(None).expect("Failed to wait on GPU Fence future");
     //     }
-    // 
+    //
     //     let b = Instant::now();
     //     self.debug_time_blocked += b.duration_since(a).as_secs_f64();
-    // 
-    // 
+    //
+    //
     //     if is_suboptimal {
     //         // Swapchain will be recreated next time
     //         self.request_recreate_swapchain();
     //     }
-    // 
-    // 
+    //
+    //
     //     // Store the acquire_next_image future and index for later use in present_frame
     //     self.swapchain_info.prev_image_idx = self.swapchain_info.current_image_idx;
     //     self.swapchain_info.current_image_idx = image_index;
     //     self.swapchain_info.acquire_future = Some(acquire_future);
     //     // self.swapchain_info.acquire_futures[image_index as usize] = Some(acquire_future);
-    // 
-    // 
+    //
+    //
     //     // Get the command buffer from the pool for this frame
     //     let allocator = self.command_buffer_allocator.clone();
     //     let queue_family_index = self.queue_details.graphics_queue_family_index.unwrap();
-    // 
+    //
     //     let cmd_buf = match AutoCommandBufferBuilder::primary(allocator.clone(), queue_family_index, CommandBufferUsage::MultipleSubmit) {
     //         Ok(r) => r,
     //         Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to allocate command buffer for begin_frame"))
     //     };
-    // 
+    //
     //     let mut cmd_buf = CommandBuffer::new(VulkanoCommandBufferType::Primary(cmd_buf));
-    // 
+    //
     //     // Begin frame stats measurement
     //     if let Err(err) = self.begin_frame_stats_query(&mut cmd_buf) {
     //         return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to begin PipelineStatistics query"))
     //     }
-    // 
+    //
     //     BeginFrameResult::Begin(cmd_buf)
     // }
-    // 
+    //
     // pub fn present_frame(&mut self, mut cmd_buf: CommandBuffer) -> Result<bool> {
-    // 
+    //
     //     self.state = Default::default();
-    // 
+    //
     //     // End frame stats measurement
     //     self.end_frame_stats_query(&mut cmd_buf)
     //         .inspect_err(|_| error!("Failed to enf PipelineStatistics query"))?;
-    // 
+    //
     //     // Finalize the command buffer
     //     // cmd_buf.get().build()?;
     //     let cmd_buf = cmd_buf.build_primary()?;
-    // 
+    //
     //     let swapchain = self.swapchain()?.clone();
     //     let image_index = self.swapchain_info.current_image_idx;
     //     let acquire_future = self.swapchain_info.acquire_future.take().unwrap();
-    // 
+    //
     //     let prev_frame_index = self.swapchain_info.prev_image_idx as usize;
     //     let prev_frame_end = match self.swapchain_info.in_flight_frames[prev_frame_index].clone() {
     //         None => self.sync_now(),
     //         Some(fence) => fence.boxed()
     //     };
-    // 
+    //
     //     let queue = self.queue(QueueId::GraphicsMain.name())
     //         .ok_or_else(|| anyhow!("Failed to get the GRAPHICS queue \"{}\"", QueueId::GraphicsMain.name()))?;
-    // 
+    //
     //     let present_info = SwapchainPresentInfo::swapchain_image_index(swapchain, image_index);
-    // 
+    //
     //     // We join on the previous frame end future for the current frame
     //     let future = prev_frame_end
     //         .join(acquire_future)
     //         .then_execute(queue.clone(), cmd_buf)?
     //         .then_swapchain_present(queue.clone(), present_info)
     //         .then_signal_fence_and_flush();
-    // 
+    //
     //     let future = match future {
     //         Ok(future) => {
     //             #[allow(clippy::arc_with_non_send_sync)]
@@ -1465,18 +1475,18 @@ impl GraphicsManager {
     //             None
     //         }
     //     };
-    // 
+    //
     //     self.read_frame_stats_query_results()?;
-    // 
+    //
     //     let current_frame_index = self.swapchain_info.current_image_idx as usize;
-    // 
+    //
     //     // Store the current present future in the ring buffer
     //     self.swapchain_info.in_flight_frames[current_frame_index] = future;
-    // 
+    //
     //     // // Increment the ring buffer for the next
     //     // self.current_frame_index = (self.current_frame_index + 1) % self.max_concurrent_frames;
     //     // // info!("begin_frame for next frame {}, image index {} -> {}", self.current_frame_index, self.swapchain_info.current_image_idx, image_index);
-    // 
+    //
     //     Ok(true)
     // }
 
@@ -1501,6 +1511,11 @@ impl GraphicsManager {
 
     fn begin_frame_stats_query(&mut self, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
+        if !self.debug_pipeline_statistics_enabled {
+            // Do nothing
+            return Ok(())
+        }
+        
         // Pipeline statistics
         cmd_buf.reset_query_pool(self.pipeline_stats_query_pool.clone(), 0..self.pipeline_stats_query_pool.query_count())
             .inspect_err(|_| error!("Failed to reset query pool 0..{} for PipelineStatistics", self.pipeline_stats_query_pool.query_count()))?;
@@ -1527,6 +1542,11 @@ impl GraphicsManager {
 
     fn end_frame_stats_query(&mut self, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
+        if !self.debug_pipeline_statistics_enabled {
+            // Do nothing
+            return Ok(())
+        }
+        
         // Pipeline statistics
         cmd_buf.end_query(self.pipeline_stats_query_pool.clone(), 0)
             .inspect_err(|_| error!("Failed to end query 0 for PipelineStatistics"))?;
@@ -1566,24 +1586,29 @@ impl GraphicsManager {
         self.timestamp_query_pool.query_count() - 1
     }
 
-    fn read_frame_stats_query_results(&mut self) -> Result<()>{
-        let mut results: [u64; 4] = [0; 4];
-        self.pipeline_stats_query_pool.get_results(0..1, &mut results, QueryResultFlags::WAIT)?;
+    fn read_frame_stats_query_results(&mut self) -> Result<()> {
+        if self.debug_pipeline_statistics_enabled {
+            let mut results: [u64; 4] = [0; 4];
+            self.pipeline_stats_query_pool.get_results(0..1, &mut results, QueryResultFlags::WAIT)?;
 
-        self.timestamp_query_results.resize(self.timestamp_query_pool.query_count() as usize, 0u64);
+            self.timestamp_query_results.resize(self.timestamp_query_pool.query_count() as usize, 0u64);
 
-        self.timestamp_query_pool.get_results(0..self.current_timestamp_query_index, &mut self.timestamp_query_results, QueryResultFlags::WAIT)?;
+            self.timestamp_query_pool.get_results(0..self.current_timestamp_query_index, &mut self.timestamp_query_results, QueryResultFlags::WAIT)?;
 
-        let end_idx = (self.current_timestamp_query_index - 1) as usize;
+            let end_idx = (self.current_timestamp_query_index - 1) as usize;
 
-        let pipeline_stats = DebugPipelineStatistics {
-            gpu_time: (self.timestamp_query_results[end_idx] - self.timestamp_query_results[0]) as f64 / 1000000.0,
-            input_assembly_primitives: results[0],
-            vertex_shader_invocations: results[1],
-            fragment_shader_invocations: results[2]
-        };
+            let pipeline_stats = DebugPipelineStatistics {
+                gpu_time: (self.timestamp_query_results[end_idx] - self.timestamp_query_results[0]) as f64 / 1000000.0,
+                input_assembly_primitives: results[0],
+                vertex_shader_invocations: results[1],
+                fragment_shader_invocations: results[2]
+            };
 
-        self.debug_pipeline_statistics = Some(pipeline_stats);
+            self.debug_pipeline_statistics = Some(pipeline_stats);
+            
+        } else {
+            self.debug_pipeline_statistics = None;
+        }
 
         Ok(())
     }
@@ -1671,6 +1696,7 @@ impl GraphicsManager {
         };
 
         let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
+        buffer.buffer().set_debug_utils_object_name(Some("GraphicsManager-StagingBuffer"))?;
 
         // debug!("create_staging_subbuffer for {len}x \"{}\" elements each {} bytes (buffer requires {} bytes) - buffer length is {} elements ({} bytes)", type_name::<T>(), size_of::<T>(), len * size_of::<T>() as DeviceSize, buffer.len(), buffer.len() * size_of::<T>() as DeviceSize);
         // debug!("Underlying buffer is {} ({} bytes capacity, {} bytes offset, {} bytes size)", buffer.buffer().handle() as u64, buffer.buffer().size(), buffer.offset(), buffer.size());
@@ -1695,6 +1721,7 @@ impl GraphicsManager {
         };
 
         let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
+        buffer.buffer().set_debug_utils_object_name(Some("GraphicsManager-ReadbackBuffer"))?;
         Ok(buffer)
     }
 
@@ -1710,6 +1737,25 @@ impl GraphicsManager {
             *o = i;
         }
 
+        Ok(())
+    }
+
+    pub fn upload_buffer_data_bytes_iter<T, I>(buffer: &Subbuffer<[u8]>, iter: I) -> Result<()>
+    where
+        T: BufferContents,
+        I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator{
+
+        let mut write = buffer.write()?;
+
+        let mut idx = 0;
+        for i in iter {
+            let src = get_raw_bytes(&i);
+            let dst = &mut write[idx .. idx+src.len()];
+            dst.clone_from_slice(src);
+            idx += src.len();
+        }
+        
         Ok(())
     }
 
@@ -1763,33 +1809,33 @@ impl GraphicsManager {
 
         Ok(cmd_buf)
     }
-    
+
     // // USE VULKANO COMMAND BUFFERS
     // pub fn submit_transfer_commands(&self, cmd_buf: VulkanoCommandBuffer) -> Result<FenceSignalFuture<CommandBufferExecFuture<NowFuture>>> {
     //     let queue = self.transfer_queue();
-    // 
+    //
     //     let cmd_buf = cmd_buf.build_primary()?;
     //     let fence = cmd_buf.execute(queue)?
     //         .then_signal_fence_and_flush()?;
-    // 
+    //
     //     Ok(fence)
     // }
 
     // USE ASH COMMAND BUFFERS
     pub fn submit_transfer_commands(&self, mut cmd_buf: AshCommandBuffer) -> Result<Fence> {
         let queue = self.transfer_queue();
-    
+
         cmd_buf.end()?;
         let cmd_buf = cmd_buf.handle();
-    
+
         let submit_infos = vk::SubmitInfo::default()
             .command_buffers(slice::from_ref(&cmd_buf));
-    
+
         let fence_create_info = FenceCreateInfo::default();
         let fence = Fence::new(self.device.clone(), fence_create_info)?;
-    
+
         unsafe { self.ash_device.queue_submit(queue.handle(), slice::from_ref(&submit_infos), fence.handle()) }?;
-    
+
         Ok(fence)
     }
     
