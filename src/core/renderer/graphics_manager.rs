@@ -1,10 +1,10 @@
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
 use crate::core::renderer::command_buffer::CommandBuffer;
-use crate::core::{AshCommandBuffer, CommandBufferImpl, VulkanoCommandBuffer, VulkanoCommandBufferType};
+use crate::core::util::util::get_raw_bytes;
+use crate::core::{AshCommandBuffer, CommandBufferImpl};
 use crate::{log_error_and_anyhow, log_error_and_throw};
 use anyhow::{anyhow, Result};
-use ash::vk::{AcquireNextImageInfoKHR, CommandBufferUsageFlags};
 use ash::{khr, vk};
 use log::{debug, error, info, warn};
 use shaderc::{CompilationArtifact, CompileOptions, Compiler, ShaderKind};
@@ -20,7 +20,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
-use vulkano::command_buffer::{CommandBufferExecFuture, CommandBufferLevel, CommandBufferSubmitInfo, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RecordingCommandBuffer, SecondaryAutoCommandBuffer, SemaphoreSubmitInfo, SubmitInfo};
+use vulkano::command_buffer::CommandBufferExecFuture;
+use vulkano::command_buffer::CommandBufferUsage;
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwnedVulkanObject, Queue, QueueCreateInfo, QueueFlags};
@@ -35,13 +36,12 @@ use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::query::{QueryControlFlags, QueryPipelineStatisticFlags, QueryPool, QueryPoolCreateInfo, QueryResultFlags, QueryType};
 use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency, SubpassDescription};
 use vulkano::shader::{ShaderModule, ShaderModuleCreateInfo};
-use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo};
+use vulkano::swapchain::{ColorSpace, CompositeAlpha, PresentFuture, PresentMode, Surface, SurfaceCapabilities, SurfaceInfo, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo};
 use vulkano::sync::fence::{Fence, FenceCreateFlags, FenceCreateInfo};
 use vulkano::sync::future::{FenceSignalFuture, JoinFuture};
 use vulkano::sync::semaphore::{Semaphore, SemaphoreCreateInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
 use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary, VulkanObject};
-use crate::core::util::util::get_raw_bytes;
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -113,6 +113,7 @@ pub struct SwapchainInfo {
     image_views: Vec<(Arc<ImageView>, Arc<ImageView>)>,
     framebuffers: Vec<Arc<Framebuffer>>,
     // command_buffers: Vec<Arc<CommandBuffer>>,
+    command_buffers: Vec<CommandBuffer>,
     acquire_future: Option<SwapchainAcquireFuture>,
     // in_flight_frames: Vec<Box<dyn GpuFuture>>,
     in_flight_frames: Vec<Option<Arc<InFlightFrameFuture>>>,
@@ -121,6 +122,7 @@ pub struct SwapchainInfo {
     prev_image_idx: u32,
     image_extent: [u32; 2],
     buffer_mode: SwapchainBufferMode,
+
 
     image_available_semaphores: Vec<Arc<Semaphore>>,
     render_finished_semaphores: Vec<Arc<Semaphore>>,
@@ -134,6 +136,7 @@ impl SwapchainInfo {
             images: Default::default(),
             image_views: Default::default(),
             framebuffers: Default::default(),
+            command_buffers: Default::default(),
             acquire_future: Default::default(),
             // acquire_futures: Default::default(),
             in_flight_frames: Default::default(),
@@ -732,6 +735,7 @@ impl GraphicsManager {
         let queue_family_index = queue_details.graphics_queue_family_index.unwrap();
 
         let create_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index);
 
         let command_pool = unsafe { device.create_command_pool(&create_info, None) }?;
@@ -1064,6 +1068,8 @@ impl GraphicsManager {
             .inspect_err(|_| error!("Failed to create RenderPass"))?;
 
         // self.swapchain_info.acquire_futures.clear();
+        self.swapchain_info.command_buffers.clear();
+
         self.swapchain_info.acquire_future = None;
         self.swapchain_info.in_flight_frames.clear();
 
@@ -1163,6 +1169,7 @@ impl GraphicsManager {
         };
 
         for _ in 0..self.max_concurrent_frames() {
+            self.swapchain_info.command_buffers.push(CommandBuffer::new(self.ash_device.clone(), self.get_graphics_command_pool().clone(), vk::CommandBufferLevel::PRIMARY));
             self.swapchain_info.image_available_semaphores.push(Arc::new(Semaphore::new(self.device.clone(), semaphore_create_info.clone())?));
             self.swapchain_info.render_finished_semaphores.push(Arc::new(Semaphore::new(self.device.clone(), semaphore_create_info.clone())?));
             self.swapchain_info.frame_complete_fences.push(Arc::new(Fence::new(self.device.clone(), fence_create_info.clone())?));
@@ -1238,7 +1245,7 @@ impl GraphicsManager {
 
         // ==== ACQUIRE THE NEXT IMAGE ====
 
-        let acquire_info = AcquireNextImageInfoKHR::default()
+        let acquire_info = vk::AcquireNextImageInfoKHR::default()
             .swapchain(swapchain)
             .device_mask(1)
             .timeout(u64::MAX)
@@ -1269,23 +1276,21 @@ impl GraphicsManager {
             self.request_recreate_swapchain();
         }
 
-
-        // Store the acquire_next_image future and index for later use in present_frame
+        // Store the acquire_next_image index for later use in present_frame
         self.swapchain_info.prev_image_idx = self.swapchain_info.current_image_idx;
         self.swapchain_info.current_image_idx = image_index;
 
-        // Get the command buffer from the pool for this frame
-        let allocator = self.command_buffer_allocator.clone();
-        let queue_family_index = self.queue_details.graphics_queue_family_index.unwrap();
-
-
         // USE ASH COMMAND BUFFERS
-        let mut cmd_buf = AshCommandBuffer::new(self.ash_device.clone(), self.get_graphics_command_pool().clone(), vk::CommandBufferLevel::PRIMARY);
+        let mut cmd_buf = self.swapchain_info.command_buffers[current_frame_index].clone();
+        // let mut cmd_buf = AshCommandBuffer::new(self.ash_device.clone(), self.get_graphics_command_pool().clone(), vk::CommandBufferLevel::PRIMARY);
         if let Err(err) = cmd_buf.begin(CommandBufferUsage::MultipleSubmit) {
             return BeginFrameResult::Err(log_error_and_throw!(err, "Failed to begin CommandBuffer for begin_frame()"))
         }
 
         // USE VULKANO COMMAND BUFFERS
+        // // Get the command buffer from the pool for this frame
+        // let allocator = self.command_buffer_allocator.clone();
+        // let queue_family_index = self.queue_details.graphics_queue_family_index.unwrap();
         // let cmd_buf = match AutoCommandBufferBuilder::primary(allocator.clone(), queue_family_index, CommandBufferUsage::MultipleSubmit) {
         //     Ok(r) => r,
         //     Err(err) => return BeginFrameResult::Err(log_error_and_throw!(anyhow!(err), "Failed to allocate command buffer for begin_frame"))
@@ -1515,7 +1520,7 @@ impl GraphicsManager {
             // Do nothing
             return Ok(())
         }
-        
+
         // Pipeline statistics
         cmd_buf.reset_query_pool(self.pipeline_stats_query_pool.clone(), 0..self.pipeline_stats_query_pool.query_count())
             .inspect_err(|_| error!("Failed to reset query pool 0..{} for PipelineStatistics", self.pipeline_stats_query_pool.query_count()))?;
@@ -1546,7 +1551,7 @@ impl GraphicsManager {
             // Do nothing
             return Ok(())
         }
-        
+
         // Pipeline statistics
         cmd_buf.end_query(self.pipeline_stats_query_pool.clone(), 0)
             .inspect_err(|_| error!("Failed to end query 0 for PipelineStatistics"))?;
@@ -1605,7 +1610,7 @@ impl GraphicsManager {
             };
 
             self.debug_pipeline_statistics = Some(pipeline_stats);
-            
+
         } else {
             self.debug_pipeline_statistics = None;
         }
@@ -1755,7 +1760,7 @@ impl GraphicsManager {
             dst.clone_from_slice(src);
             idx += src.len();
         }
-        
+
         Ok(())
     }
 

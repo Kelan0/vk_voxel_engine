@@ -35,8 +35,8 @@ impl Texture {
         }
     }
 
-    pub fn new_from_image(image: Arc<Image>, sampler: Arc<Sampler>) -> Result<Self> {
-        let image_view = Texture::create_image_view_from_image(image)?;
+    pub fn new_from_image(image: Arc<Image>, sampler: Arc<Sampler>, name: Option<&str>) -> Result<Self> {
+        let image_view = Texture::create_image_view_from_image(image, name)?;
         Ok(Self::new(image_view, sampler))
     }
 
@@ -60,7 +60,7 @@ impl Texture {
         self.image_view.image().extent()
     }
 
-    pub fn create_image_2d(allocator: Arc<dyn MemoryAllocator>, width: u32, height: u32, format: Format, usage: ImageUsage) -> Result<Arc<Image>> {
+    pub fn create_image_2d(allocator: Arc<dyn MemoryAllocator>, width: u32, height: u32, format: Format, usage: ImageUsage, name: Option<&str>) -> Result<Arc<Image>> {
 
         let image_create_info = ImageCreateInfo{
             format,
@@ -77,22 +77,24 @@ impl Texture {
             ..Default::default()
         };
         let image = Image::new(allocator, image_create_info, allocation_info)?;
+        image.set_debug_utils_object_name(name)?;
 
         Ok(image)
     }
 
-    pub fn create_image_view_2d(allocator: Arc<dyn MemoryAllocator>, width: u32, height: u32, format: Format, usage: ImageUsage) -> Result<Arc<ImageView>> {
-        let image = Self::create_image_2d(allocator, width, height, format, usage)?;
-        Self::create_image_view_from_image(image)
+    pub fn create_image_view_2d(allocator: Arc<dyn MemoryAllocator>, width: u32, height: u32, format: Format, usage: ImageUsage, name: Option<&str>) -> Result<Arc<ImageView>> {
+        let image = Self::create_image_2d(allocator, width, height, format, usage, name)?;
+        Self::create_image_view_from_image(image, name)
     }
 
-    pub fn create_image_view_from_image(image: Arc<Image>) -> Result<Arc<ImageView>> {
+    pub fn create_image_view_from_image(image: Arc<Image>, name: Option<&str>) -> Result<Arc<ImageView>> {
 
         let image_view_create_info = ImageViewCreateInfo{
             ..ImageViewCreateInfo::from_image(image.as_ref())
         };
 
         let image_view = ImageView::new(image, image_view_create_info)?;
+        image_view.set_debug_utils_object_name(name)?;
 
         Ok(image_view)
     }
@@ -160,14 +162,14 @@ impl Texture {
         Ok(())
     }
 
-    pub fn load_image_from_file_staged(cmd_buf: &mut CommandBuffer, allocator: Arc<dyn MemoryAllocator>, staging_buffer: &Subbuffer<[u8]>, file_path: &str, usage: ImageUsage) -> Result<Arc<Image>> {
+    pub fn load_image_from_file_staged(cmd_buf: &mut CommandBuffer, allocator: Arc<dyn MemoryAllocator>, staging_buffer: &Subbuffer<[u8]>, file_path: &str, usage: ImageUsage, name: Option<&str>) -> Result<Arc<Image>> {
 
         let mut buf = vec![];
         let info = Self::load_image_file(file_path, 0, &mut buf)?;
         let bytes = &buf[..info.buffer_size()];
         let format = Self::get_image_format(&info);
 
-        let image = Self::create_image_2d(allocator, info.width, info.height, format, usage | ImageUsage::TRANSFER_DST)?;
+        let image = Self::create_image_2d(allocator, info.width, info.height, format, usage | ImageUsage::TRANSFER_DST, name)?;
 
         Self::load_image_from_data_staged(cmd_buf, staging_buffer, bytes, image.clone())?;
 
@@ -255,15 +257,15 @@ struct TextureAtlasLoadingContext {
 }
 
 impl TextureAtlas {
-    pub fn new(allocator: Arc<dyn MemoryAllocator>, texture_size: u32, column_count: u32, row_count: u32, format: Format, usage: ImageUsage) -> Result<Self> {
+    pub fn new(allocator: Arc<dyn MemoryAllocator>, texture_size: u32, column_count: u32, row_count: u32, format: Format, usage: ImageUsage, name: Option<&str>) -> Result<Self> {
         let device = allocator.device().clone();
 
         let atlas_width = texture_size * column_count;
         let atlas_height = texture_size * row_count;
-        let image = Texture::create_image_2d(allocator, atlas_width, atlas_height, format, usage)?;
+        let image = Texture::create_image_2d(allocator, atlas_width, atlas_height, format, usage, name)?;
 
         let sampler = Texture::create_default_sampler(device)?;
-        let texture = Texture::new_from_image(image, sampler)?;
+        let texture = Texture::new_from_image(image, sampler, name)?;
 
         let texture_atlas = TextureAtlas{
             texture,

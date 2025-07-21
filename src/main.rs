@@ -119,7 +119,7 @@ impl App for TestGame {
 
         let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
 
-        let mut texture_atlas = TextureAtlas::new(allocator.clone(), 16, 4, 4, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST)?;
+        let mut texture_atlas = TextureAtlas::new(allocator.clone(), 16, 4, 4, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST, Some("TestGame-TextureAtlas"))?;
 
         let tex_staging_buffer = texture_atlas.create_staging_buffer(allocator.clone())?;
         texture_atlas.begin_loading(tex_staging_buffer.clone())?;
