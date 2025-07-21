@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
@@ -13,7 +12,7 @@ use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::pipeline::{GraphicsPipeline, PipelineBindPoint, PipelineLayout};
 use vulkano::query::{QueryControlFlags, QueryPool};
-use vulkano::sync::PipelineStage;
+use vulkano::sync::{BufferMemoryBarrier, DependencyFlags, ImageMemoryBarrier, MemoryBarrier, PipelineStage, PipelineStages, QueueFamilyOwnershipTransfer};
 use vulkano::VulkanObject;
 
 type PrimaryCommandBuffer = AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
@@ -26,9 +25,9 @@ pub type CommandBuffer = AshCommandBuffer;
 
 pub trait CommandBufferImpl {
     fn begin(&mut self, usage: CommandBufferUsage) -> Result<()>;
-    
+
     fn end(&mut self) -> Result<()>;
-    
+
     fn end_query(&mut self, query_pool: Arc<QueryPool>, query: u32) -> Result<()>;
 
     fn begin_query(&mut self, query_pool: Arc<QueryPool>, query: u32, flags: QueryControlFlags) -> Result<()>;
@@ -58,6 +57,8 @@ pub trait CommandBufferImpl {
     fn bind_descriptor_sets(&mut self, pipeline_bind_point: PipelineBindPoint, pipeline_layout: Arc<PipelineLayout>, first_set: u32, descriptor_sets: impl DescriptorSetsCollection) -> Result<()>;
 
     fn bind_pipeline_graphics(&mut self, pipeline: Arc<GraphicsPipeline>) -> Result<()>;
+
+    fn pipeline_barrier(&mut self, src_stage: PipelineStages, dst_stage: PipelineStages, dependency_flags: DependencyFlags, memory_barriers: &[MemoryBarrier], buffer_memory_barriers: &[BufferMemoryBarrier], image_memory_barriers: &[ImageMemoryBarrier]) -> Result<()>;
 }
 
 
@@ -219,6 +220,11 @@ impl CommandBufferImpl for VulkanoCommandBuffer {
         };
         Ok(())
     }
+
+    fn pipeline_barrier(&mut self, src_stage: PipelineStages, dst_stage: PipelineStages, dependency_flags: DependencyFlags, memory_barriers: &[MemoryBarrier], buffer_memory_barriers: &[BufferMemoryBarrier], image_memory_barriers: &[ImageMemoryBarrier]) -> Result<()> {
+        // Vulkano handles this for us. Nothing to do.
+        Ok(())
+    }
 }
 
 
@@ -243,11 +249,11 @@ impl AshCommandBuffer {
             cmd_buf,
         }
     }
-    
+
     pub fn device(&self) -> &ash::Device {
         &self.device
     }
-    
+
     pub fn handle(&self) -> &vk::CommandBuffer {
         &self.cmd_buf
     }
@@ -373,11 +379,11 @@ impl CommandBufferImpl for AshCommandBuffer {
             .render_pass(render_pass_begin_info.render_pass.handle())
             .framebuffer(render_pass_begin_info.framebuffer.handle())
             .render_area(Rect2D{
-                offset: Offset2D{ x: render_pass_begin_info.render_area_offset[0] as i32, y: render_pass_begin_info.render_area_offset[1] as i32 }, 
-                extent: Extent2D{ width: render_pass_begin_info.render_area_extent[0], height: render_pass_begin_info.render_area_extent[1]} 
+                offset: Offset2D{ x: render_pass_begin_info.render_area_offset[0] as i32, y: render_pass_begin_info.render_area_offset[1] as i32 },
+                extent: Extent2D{ width: render_pass_begin_info.render_area_extent[0], height: render_pass_begin_info.render_area_extent[1]}
             })
             .clear_values(&clear_values);
-        
+
         unsafe { self.device.cmd_begin_render_pass(self.cmd_buf, &render_pass_begin, subpass_begin_info.contents.into()) };
         Ok(())
     }
@@ -406,7 +412,7 @@ impl CommandBufferImpl for AshCommandBuffer {
             descriptor_sets[i] = curr_descriptor_set.handle();
             dynamic_offsets.extend_from_slice(curr_dynamic_offsets);
         }
-        
+
         unsafe { self.device.cmd_bind_descriptor_sets(self.cmd_buf, pipeline_bind_point.into(), pipeline_layout.handle(), first_set, &descriptor_sets, &dynamic_offsets) };
         Ok(())
     }
@@ -415,5 +421,90 @@ impl CommandBufferImpl for AshCommandBuffer {
         let pipeline = pipeline.handle();
         unsafe { self.device.cmd_bind_pipeline(self.cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline) };
         Ok(())
+    }
+
+    fn pipeline_barrier(&mut self, src_stage: PipelineStages, dst_stage: PipelineStages, dependency_flags: DependencyFlags, memory_barriers: &[MemoryBarrier], buffer_memory_barriers: &[BufferMemoryBarrier], image_memory_barriers: &[ImageMemoryBarrier]) -> Result<()>{
+        let dependency_flags = dependency_flags.into();
+        let src_stage_mask = src_stage.into();
+        let dst_stage_mask = dst_stage.into();
+        let mut vk_memory_barriers = vec![vk::MemoryBarrier::default(); memory_barriers.len()];
+        let mut vk_buffer_memory_barriers = vec![vk::BufferMemoryBarrier::default(); memory_barriers.len()];
+        let mut vk_image_memory_barriers = vec![vk::ImageMemoryBarrier::default(); memory_barriers.len()];
+
+        for (i, memory_barrier) in memory_barriers.iter().enumerate() {
+            vk_memory_barriers[i] = vk::MemoryBarrier::default()
+                .src_access_mask(memory_barrier.src_access.into())
+                .dst_access_mask(memory_barrier.dst_access.into());
+        }
+        for (i, buffer_memory_barrier) in buffer_memory_barriers.iter().enumerate() {
+            let (src_queue_family_index, dst_queue_family_index) = buffer_memory_barrier.queue_family_ownership_transfer.as_ref()
+                .map_or((vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED), queue_family_ownership_transfer_to_vk);
+            vk_buffer_memory_barriers[i] = vk::BufferMemoryBarrier::default()
+                .src_access_mask(buffer_memory_barrier.src_access.into())
+                .dst_access_mask(buffer_memory_barrier.dst_access.into())
+                .src_queue_family_index(src_queue_family_index)
+                .dst_queue_family_index(dst_queue_family_index)
+                .buffer(buffer_memory_barrier.buffer.handle())
+                .offset(buffer_memory_barrier.range.start)
+                .size(buffer_memory_barrier.range.end - buffer_memory_barrier.range.start);
+        }
+        for (i, image_memory_barrier) in image_memory_barriers.iter().enumerate() {
+            let (src_queue_family_index, dst_queue_family_index) = image_memory_barrier.queue_family_ownership_transfer.as_ref()
+                .map_or((vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED), queue_family_ownership_transfer_to_vk);
+            vk_image_memory_barriers[i] = vk::ImageMemoryBarrier::default()
+                .src_access_mask(image_memory_barrier.src_access.into())
+                .dst_access_mask(image_memory_barrier.dst_access.into())
+                .old_layout(image_memory_barrier.old_layout.into())
+                .new_layout(image_memory_barrier.new_layout.into())
+                .src_queue_family_index(src_queue_family_index)
+                .dst_queue_family_index(dst_queue_family_index)
+                .image(image_memory_barrier.image.handle())
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: image_memory_barrier.subresource_range.aspects.into(),
+                    base_mip_level: image_memory_barrier.subresource_range.mip_levels.start,
+                    level_count: image_memory_barrier.subresource_range.mip_levels.end - image_memory_barrier.subresource_range.mip_levels.start,
+                    base_array_layer: image_memory_barrier.subresource_range.array_layers.start,
+                    layer_count: image_memory_barrier.subresource_range.array_layers.end - image_memory_barrier.subresource_range.array_layers.start,
+                });
+        }
+
+        unsafe { self.device.cmd_pipeline_barrier(self.cmd_buf, src_stage_mask, dst_stage_mask, dependency_flags, &vk_memory_barriers, &vk_buffer_memory_barriers, &vk_image_memory_barriers) }
+        Ok(())
+    }
+}
+
+
+fn queue_family_ownership_transfer_to_vk(transfer: &QueueFamilyOwnershipTransfer) -> (u32, u32) {
+    match *transfer {
+        QueueFamilyOwnershipTransfer::ExclusiveBetweenLocal {
+            src_index,
+            dst_index,
+        } => (src_index, dst_index),
+        QueueFamilyOwnershipTransfer::ExclusiveToExternal { src_index } => (src_index, vk::QUEUE_FAMILY_EXTERNAL),
+        QueueFamilyOwnershipTransfer::ExclusiveFromExternal { dst_index } => {
+            (vk::QUEUE_FAMILY_EXTERNAL, dst_index)
+        }
+        QueueFamilyOwnershipTransfer::ExclusiveToForeign { src_index } => {
+            (src_index, vk::QUEUE_FAMILY_FOREIGN_EXT)
+        }
+        QueueFamilyOwnershipTransfer::ExclusiveFromForeign { dst_index } => {
+            (vk::QUEUE_FAMILY_FOREIGN_EXT, dst_index)
+        }
+        QueueFamilyOwnershipTransfer::ConcurrentToExternal => (
+            vk::QUEUE_FAMILY_IGNORED,
+            vk::QUEUE_FAMILY_EXTERNAL,
+        ),
+        QueueFamilyOwnershipTransfer::ConcurrentFromExternal => (
+            vk::QUEUE_FAMILY_EXTERNAL,
+            vk::QUEUE_FAMILY_IGNORED,
+        ),
+        QueueFamilyOwnershipTransfer::ConcurrentToForeign => (
+            vk::QUEUE_FAMILY_IGNORED,
+            vk::QUEUE_FAMILY_FOREIGN_EXT,
+        ),
+        QueueFamilyOwnershipTransfer::ConcurrentFromForeign => (
+            vk::QUEUE_FAMILY_FOREIGN_EXT,
+            vk::QUEUE_FAMILY_IGNORED,
+        ),
     }
 }
