@@ -1,9 +1,8 @@
-use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
 use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
-use crate::core::renderer::{BeginFrameResult};
-use crate::core::{CommandBuffer, GraphicsManager, SceneRenderer};
+use crate::core::renderer::BeginFrameResult;
+use crate::core::scene::Scene;
+use crate::core::{CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -11,7 +10,6 @@ use vulkano::command_buffer::{
     RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
 };
 use vulkano::format::ClearValue;
-use crate::core::scene::Scene;
 
 // Eww global state in Rust >:(
 static mut NEXT_RESOURCE_ID: u64 = 0;

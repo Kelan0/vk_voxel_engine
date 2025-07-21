@@ -13,8 +13,8 @@ raw-window-handle = "0.6.2"
 sdl3 = { version = "0.14.33", features = [ "ash", "raw-window-handle" ] }
 thiserror = "2.0.12"
 tobj = "4.0.3"
-vulkano = { version = "0.35.1" }
-#ash = "0.38.0"
+ash = "0.38.0"
+vulkano = { version = "0.35.1", features = ["default"] }
 smallvec = "1.15.1"
 shaderc = "0.9.1"
 foldhash = "=0.1.5"

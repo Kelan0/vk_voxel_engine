@@ -1,12 +1,12 @@
-use crate::core::{CommandBuffer, Engine, GraphicsManager};
+use crate::core::{CommandBuffer, CommandBufferImpl, Engine, GraphicsManager};
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::CopyBufferInfo;
-use vulkano::DeviceSize;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter};
 use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::DeviceSize;
 
 pub struct MeshConfiguration<V: Vertex> {
     pub vertices: Vec<V>,

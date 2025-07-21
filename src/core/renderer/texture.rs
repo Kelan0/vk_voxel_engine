@@ -1,4 +1,4 @@
-use crate::core::{CommandBuffer, Engine, GraphicsManager};
+use crate::core::{CommandBuffer, CommandBufferImpl, Engine, GraphicsManager};
 use anyhow::Result;
 use png::{BitDepth, ColorType, OutputInfo};
 use smallvec::smallvec;
