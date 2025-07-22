@@ -231,7 +231,7 @@ impl App for TestGame {
         if let Some(event) = engine
             .window
             .event_bus()
-            .read_one_opt(&mut self.event_window_resized)
+            .read_one_opt_ref(&mut self.event_window_resized)
         {
             let aspect_ratio = event.width as f32 / event.height as f32;
             let camera = engine.scene_renderer.camera_mut();

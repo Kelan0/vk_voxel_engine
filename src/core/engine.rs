@@ -236,7 +236,7 @@ impl Tickable for Engine {
         if let Some(event) = self
             .window
             .event_bus()
-            .read_one_opt(&mut self.event_window_resized)
+            .read_one_opt_ref(&mut self.event_window_resized)
         {
             self.graphics.set_resolution(event.width, event.height)?;
         }

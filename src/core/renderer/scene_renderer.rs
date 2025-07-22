@@ -1,5 +1,6 @@
+use std::any::Any;
 use crate::application::Ticker;
-use crate::core::{Camera, CameraDataUBO, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, CleanupFrameResourcesEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
@@ -152,8 +153,9 @@ struct DynamicRenderComponentMarker;
 
 
 pub struct SceneRenderer {
-    graphics_pipeline: Option<Arc<GraphicsPipeline>>,
+    solid_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     wire_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
+    debug_lines_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     resources: Vec<FrameResource>,
     wireframe_mode: WireframeMode,
     camera: Camera,
@@ -177,6 +179,7 @@ pub struct SceneRenderer {
     static_scene_changed: bool,
 
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
+    event_cleanup_frame_resources: Option<ReaderId<CleanupFrameResourcesEvent>>,
 
     null_texture: Arc<ImageView>,
     default_sampler: Arc<Sampler>,
@@ -196,6 +199,7 @@ struct FrameResource {
     static_scene_changed: bool,
     textures_changed: bool,
     materials_changed: bool,
+    active_resources: Vec<Arc<dyn Any>>
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -213,8 +217,9 @@ impl SceneRenderer {
 
         let scene_renderer = SceneRenderer{
 
-            graphics_pipeline: None,
+            solid_graphics_pipeline: None,
             wire_graphics_pipeline: None,
+            debug_lines_graphics_pipeline: None,
             resources: vec![],
             wireframe_mode: WireframeMode::Solid,
             camera: Camera::new(),
@@ -238,6 +243,7 @@ impl SceneRenderer {
             static_scene_changed: false,
 
             event_recreate_swapchain: None,
+            event_cleanup_frame_resources: None,
 
             null_texture,
             default_sampler
@@ -249,6 +255,7 @@ impl SceneRenderer {
 
     pub fn register_events(&mut self, engine: &mut Engine) -> Result<()> {
         self.event_recreate_swapchain = Some(engine.graphics.event_bus().register::<RecreateSwapchainEvent>());
+        self.event_cleanup_frame_resources = Some(engine.graphics.event_bus().register::<CleanupFrameResourcesEvent>());
         Ok(())
     }
 
@@ -278,6 +285,7 @@ impl SceneRenderer {
                 static_scene_changed: false,
                 textures_changed: false,
                 materials_changed: false,
+                active_resources: vec![]
             }
         });
 
@@ -310,6 +318,9 @@ impl SceneRenderer {
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;
         }
+        if let Some(e) = engine.graphics.event_bus().read_one_opt(&mut self.event_cleanup_frame_resources) {
+            self.on_cleanup_frame_resources(engine, &e);
+        }
 
         let frame_index = engine.graphics.current_frame_index();
         let resource = &mut self.resources[frame_index];
@@ -317,7 +328,7 @@ impl SceneRenderer {
         if resource.recreate_descriptor_sets {
             resource.recreate_descriptor_sets = false;
 
-            let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
+            let graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
             Self::create_descriptor_sets(resource, graphics_pipeline, &engine.graphics)?;
         }
 
@@ -364,7 +375,7 @@ impl SceneRenderer {
             Err(err) => error!("Unable to write camera data: {err}")
         }
 
-        let graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
+        let graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
         let descriptor_set_camera = resource.descriptor_set_camera.as_ref().unwrap();
         let descriptor_set_world = resource.descriptor_set_world.as_ref().unwrap();
         let descriptor_set_materials = resource.descriptor_set_materials.as_ref().unwrap();
@@ -374,14 +385,14 @@ impl SceneRenderer {
         cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone(), descriptor_set_materials.clone()])?;
 
         if self.wireframe_mode == WireframeMode::Solid || self.wireframe_mode == WireframeMode::Both {
-            let solid_graphics_pipeline = self.graphics_pipeline.as_ref().unwrap();
+            let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(solid_graphics_pipeline.clone())?;
-            self.draw_scene(cmd_buf, &mut engine.scene)?;
+            self.draw_scene(cmd_buf, &mut engine.scene, engine.graphics.current_frame_index())?;
         }
         if self.wireframe_mode == WireframeMode::Wire || self.wireframe_mode == WireframeMode::Both {
             let wire_graphics_pipeline = self.wire_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.clone())?;
-            self.draw_scene(cmd_buf, &mut engine.scene)?;
+            self.draw_scene(cmd_buf, &mut engine.scene, engine.graphics.current_frame_index())?;
         }
 
         Ok(())
@@ -573,7 +584,7 @@ impl SceneRenderer {
         transform.write_model_matrix(&mut object_data_buffer.model_matrix)
     }
 
-    fn draw_scene(&self, cmd_buf: &mut CommandBuffer, _scene: &mut Scene) -> Result<()> {
+    fn draw_scene(&mut self, cmd_buf: &mut CommandBuffer, _scene: &mut Scene, frame_index: usize) -> Result<()> {
         let mut draw_commands = vec![];
 
         let mut first_instance = 0;
@@ -605,8 +616,11 @@ impl SceneRenderer {
             draw_commands.push(draw_command);
         }
 
+        let resource = &mut self.resources[frame_index];
+
         for draw_command in draw_commands {
             draw_command.mesh.draw(cmd_buf, draw_command.instance_count, draw_command.first_instance)?;
+            resource.active_resources.push(draw_command.mesh);
         }
 
         // let mut query = scene.world.query::<(Entity, &RenderComponent<BaseVertex>, &Transform)>();
@@ -735,25 +749,38 @@ impl SceneRenderer {
         Ok(())
     }
 
+    fn on_cleanup_frame_resources(&mut self, engine: &mut Engine, event: &CleanupFrameResourcesEvent) {
+        let resource = &mut self.resources[event.frame_index];
+        // if !resource.active_resources.is_empty() {
+        //     let discard_count: usize = resource.active_resources.iter().map(|r| (Arc::strong_count(r) == 1) as usize).sum();
+        //     if discard_count > 0 {
+        //         debug!("Discarding {} resources", discard_count);
+        //     }
+        // }
+
+        // We simply stop holding a reference to the resource, it will be cleaned up when dropped.
+        resource.active_resources.clear();
+    }
+
     fn create_main_graphics_pipeline(&mut self, engine: &Engine) -> Result<()> {
-        info!("Initialize GraphicsPipeline");
+        info!("Initialize main GraphicsPipeline");
         let device = engine.graphics.device();
         let render_pass = engine.graphics.render_pass();
 
         let mut shader_source = String::new();
-        let mut file = File::open("./res/shaders/test.glsl")?;
+        let mut file = File::open("./res/shaders/world_solid.glsl")?;
         file.read_to_string(&mut shader_source)?;
 
         let mut options = CompileOptions::new()?;
         options.add_macro_definition("VERTEX_SHADER_MODULE", None);
-        let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test.glsl::vert", "main", ShaderKind::Vertex, Some(&options))?;
+        let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "world_solid.glsl::vert", "main", ShaderKind::Vertex, Some(&options))?;
 
         let mut options = CompileOptions::new()?;
         options.add_macro_definition("FRAGMENT_SHADER_MODULE", None);
-        let fs_solid = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test.glsl::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
+        let fs_solid = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "world_solid.glsl::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
 
         options.add_macro_definition("WIREFRAME_ENABLED", None);
-        let fs_wire = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "test.glsl::frag(wire)", "main", ShaderKind::Fragment, Some(&options))?;
+        let fs_wire = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "world_solid.glsl::frag(wire)", "main", ShaderKind::Fragment, Some(&options))?;
 
         let subpass_type = Subpass::from(render_pass.clone(), 0)
             .ok_or_else(|| anyhow!("Failed to get subpass info for provided RenderPass"))?
@@ -802,7 +829,8 @@ impl SceneRenderer {
             })
             .build_pipeline::<BaseVertex>(device.clone())?;
 
-        self.graphics_pipeline = Some(main_graphics_pipeline);
+
+        self.solid_graphics_pipeline = Some(main_graphics_pipeline);
         self.wire_graphics_pipeline = Some(wire_graphics_pipeline);
 
         Ok(())
@@ -1015,7 +1043,7 @@ impl SceneRenderer {
         let mut cmd_buf = graphics.begin_transfer_commands()?;
         
         let staging_buffer = GraphicsManager::create_staging_subbuffer::<u8>(allocator.clone(), data.len() as DeviceSize)?;
-        staging_buffer.buffer().set_debug_utils_object_name(Some("SceneRenderer-CreateNullTexture-StagingBuffer"))?;
+        set_vulkan_debug_name(staging_buffer.buffer(), Some("SceneRenderer-CreateNullTexture-StagingBuffer"))?;
         let image_view = Texture::create_image_view_2d(allocator, width, height, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_SRC | ImageUsage::TRANSFER_DST, Some("SceneRenderer-NullTexture"))?;
 
         Texture::load_image_from_data_staged(&mut cmd_buf, &staging_buffer, &data, image_view.image().clone())?;

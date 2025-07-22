@@ -24,7 +24,7 @@ use vulkano::command_buffer::CommandBufferExecFuture;
 use vulkano::command_buffer::CommandBufferUsage;
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwnedVulkanObject, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwned, DeviceOwnedVulkanObject, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
 use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
@@ -41,7 +41,7 @@ use vulkano::sync::fence::{Fence, FenceCreateFlags, FenceCreateInfo};
 use vulkano::sync::future::{FenceSignalFuture, JoinFuture};
 use vulkano::sync::semaphore::{Semaphore, SemaphoreCreateInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
-use vulkano::{swapchain, sync, DeviceSize, Validated, VulkanError, VulkanLibrary, VulkanObject};
+use vulkano::{sync, DeviceSize, VulkanLibrary, VulkanObject};
 
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
@@ -199,11 +199,12 @@ pub struct DebugPipelineStatistics {
     input_assembly_primitives: u64,
     vertex_shader_invocations: u64,
     fragment_shader_invocations: u64,
+    draw_commands: u64,
 }
 
 impl Debug for DebugPipelineStatistics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GPU Time: {:.3} msec, Input assembly primitives: {}, Vertex shader invocations: {}, Fragment shader invocations: {}", self.gpu_time, self.input_assembly_primitives, self.vertex_shader_invocations, self.fragment_shader_invocations)
+        write!(f, "GPU Time: {:.3} msec, Draw commands: {}, Input assembly primitives: {}, Vertex shader invocations: {}, Fragment shader invocations: {}", self.gpu_time, self.draw_commands, self.input_assembly_primitives, self.vertex_shader_invocations, self.fragment_shader_invocations)
     }
 }
 
@@ -279,10 +280,15 @@ pub enum BeginFrameResult<E = anyhow::Error> {
     Err(E)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RecreateSwapchainEvent {
-    old_extent: [u32; 2],
-    new_extent: [u32; 2],
+    pub old_extent: [u32; 2],
+    pub new_extent: [u32; 2],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CleanupFrameResourcesEvent {
+    pub frame_index: usize,
 }
 
 
@@ -417,7 +423,7 @@ impl GraphicsManager {
             max_concurrent_frames: 3,
             current_frame_index: 0,
             state: Default::default(),
-            debug_pipeline_statistics_enabled: false,
+            debug_pipeline_statistics_enabled: true,
             debug_pipeline_statistics: None,
             current_timestamp_query_index: 0,
             timestamp_query_results: vec![],
@@ -471,7 +477,11 @@ impl GraphicsManager {
     }
 
     fn select_validation_layers(library: &Arc<VulkanLibrary>) -> Result<Vec<String>> {
-        let required_validation_layers = vec!["VK_LAYER_KHRONOS_validation"];
+        let mut required_validation_layers = vec![];
+
+        if ENABLE_VALIDATION_LAYERS {
+            required_validation_layers.push("VK_LAYER_KHRONOS_validation");
+        }
 
         let mut available_layer_properties = library.layer_properties()
             .inspect_err(|err| error!("Unable to enumerate Vulkan instance layer properties: {err}"))?;
@@ -990,10 +1000,10 @@ impl GraphicsManager {
         self.swapchain_info.image_views = vec![];
 
         for (i, image) in self.swapchain_info.images.iter().enumerate() {
-            image.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-ColourImage({i})").as_str()))?;
+            set_vulkan_debug_name(&image, Some(format!("GraphicsManager-Swapchain-ColourImage({i})").as_str()))?;
 
             let image_view_colour = ImageView::new_default(image.clone())?;
-            image_view_colour.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-ColourImageView({i})").as_str()))?;
+            set_vulkan_debug_name(&image_view_colour, Some(format!("GraphicsManager-Swapchain-ColourImageView({i})").as_str()))?;
             
             let depth_image_create_info = ImageCreateInfo{
                 image_type: ImageType::Dim2d,
@@ -1008,7 +1018,7 @@ impl GraphicsManager {
             };
             
             let depth_image = Image::new(self.memory_allocator.clone(), depth_image_create_info, allocation_info)?;
-            depth_image.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-DepthImage({i})").as_str()))?;
+            set_vulkan_debug_name(&depth_image, Some(format!("GraphicsManager-Swapchain-DepthImage({i})").as_str()))?;
             
             let depth_image_view_create_info = ImageViewCreateInfo{
                 view_type: ImageViewType::Dim2d,
@@ -1019,7 +1029,7 @@ impl GraphicsManager {
             };
             
             let image_view_depth = ImageView::new(depth_image.clone(), depth_image_view_create_info)?;
-            image_view_depth.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-DepthImageView({i})").as_str()))?;
+            set_vulkan_debug_name(&image_view_depth, Some(format!("GraphicsManager-Swapchain-DepthImageView({i})").as_str()))?;
 
             self.swapchain_info.image_views.push((image_view_colour, image_view_depth));
         }
@@ -1042,7 +1052,7 @@ impl GraphicsManager {
             };
 
             let framebuffer = Framebuffer::new(render_pass.clone(), create_info)?;
-            framebuffer.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-Framebuffer({i})",).as_str()))?;
+            set_vulkan_debug_name(&framebuffer, Some(format!("GraphicsManager-Swapchain-Framebuffer({i})",).as_str()))?;
 
             self.swapchain_info.framebuffers.push(framebuffer);
         }
@@ -1155,7 +1165,7 @@ impl GraphicsManager {
         let (swapchain, images) = Swapchain::new(self.device.clone(), self.surface.clone(), create_info)
             .inspect_err(|err| error!("Failed to create Vulkan swapchain: {err}"))?;
 
-        swapchain.set_debug_utils_object_name(Some("GraphicsManager-Swapchain"))?;
+        set_vulkan_debug_name(&swapchain, Some("GraphicsManager-Swapchain"))?;
 
         self.swapchain_info.in_flight_frames.resize_with(images.len(), || {
             // sync::now(self.device.clone())
@@ -1218,6 +1228,11 @@ impl GraphicsManager {
         debug!("Device has {} references - Swapchain has {} references", Arc::strong_count(&self.device), swapchain_ref_count);
     }
 
+    fn cleanup_frame_resources(&mut self, frame_index: usize) {
+        self.event_bus.emit(CleanupFrameResourcesEvent{
+            frame_index,
+        })
+    }
 
     pub fn begin_frame(&mut self) -> BeginFrameResult {
 
@@ -1240,8 +1255,9 @@ impl GraphicsManager {
         let frame_fence = self.swapchain_info.frame_complete_fences[current_frame_index].clone();
 
         frame_fence.wait(None).expect("Failed to wait on GPU Fence future");
+        unsafe { frame_fence.reset() }.expect("Failed to reset GPU Fence future");
 
-        _ = unsafe { frame_fence.reset() };
+        self.cleanup_frame_resources(current_frame_index);
 
         // ==== ACQUIRE THE NEXT IMAGE ====
 
@@ -1317,7 +1333,6 @@ impl GraphicsManager {
         // let cmd_buf = cmd_buf.build_primary()?;
         cmd_buf.end()?;
 
-        let cmd_buf = cmd_buf.handle();
 
         let swapchain = self.swapchain()?.handle();
         let image_index = self.swapchain_info.current_image_idx;
@@ -1337,7 +1352,7 @@ impl GraphicsManager {
         let submit_infos = [ vk::SubmitInfo::default()
             .wait_semaphores(slice::from_ref(&image_available_semaphore))
             .wait_dst_stage_mask(&wait_stages)
-            .command_buffers(slice::from_ref(&cmd_buf))
+            .command_buffers(slice::from_ref(cmd_buf.handle()))
             .signal_semaphores(slice::from_ref(&render_finished_semaphore)) ];
 
         unsafe { self.ash_device.queue_submit(queue.handle(), &submit_infos, frame_complete_fence) }?;
@@ -1349,7 +1364,7 @@ impl GraphicsManager {
 
         unsafe { self.swapchain_loader.queue_present(queue.handle(), &present_info) }?;
 
-        self.read_frame_stats_query_results()?;
+        self.read_frame_stats_query_results(&cmd_buf)?;
 
         let current_frame_index = self.swapchain_info.current_image_idx as usize;
 
@@ -1591,7 +1606,7 @@ impl GraphicsManager {
         self.timestamp_query_pool.query_count() - 1
     }
 
-    fn read_frame_stats_query_results(&mut self) -> Result<()> {
+    fn read_frame_stats_query_results(&mut self, cmd_buf: &CommandBuffer) -> Result<()> {
         if self.debug_pipeline_statistics_enabled {
             let mut results: [u64; 4] = [0; 4];
             self.pipeline_stats_query_pool.get_results(0..1, &mut results, QueryResultFlags::WAIT)?;
@@ -1606,7 +1621,8 @@ impl GraphicsManager {
                 gpu_time: (self.timestamp_query_results[end_idx] - self.timestamp_query_results[0]) as f64 / 1000000.0,
                 input_assembly_primitives: results[0],
                 vertex_shader_invocations: results[1],
-                fragment_shader_invocations: results[2]
+                fragment_shader_invocations: results[2],
+                draw_commands: cmd_buf.debug_draw_commands() as u64,
             };
 
             self.debug_pipeline_statistics = Some(pipeline_stats);
@@ -1701,7 +1717,7 @@ impl GraphicsManager {
         };
 
         let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
-        buffer.buffer().set_debug_utils_object_name(Some("GraphicsManager-StagingBuffer"))?;
+        set_vulkan_debug_name(buffer.buffer(), Some("GraphicsManager-StagingBuffer"))?;
 
         // debug!("create_staging_subbuffer for {len}x \"{}\" elements each {} bytes (buffer requires {} bytes) - buffer length is {} elements ({} bytes)", type_name::<T>(), size_of::<T>(), len * size_of::<T>() as DeviceSize, buffer.len(), buffer.len() * size_of::<T>() as DeviceSize);
         // debug!("Underlying buffer is {} ({} bytes capacity, {} bytes offset, {} bytes size)", buffer.buffer().handle() as u64, buffer.buffer().size(), buffer.offset(), buffer.size());
@@ -1726,7 +1742,7 @@ impl GraphicsManager {
         };
 
         let buffer = Buffer::new_slice::<T>(allocator, buffer_create_info, allocation_info, len)?;
-        buffer.buffer().set_debug_utils_object_name(Some("GraphicsManager-ReadbackBuffer"))?;
+        set_vulkan_debug_name(buffer.buffer(), Some("GraphicsManager-ReadbackBuffer"))?;
         Ok(buffer)
     }
 
@@ -2014,4 +2030,14 @@ impl QueueDetails {
     pub fn unique_indices(&self) -> HashSet<u32> {
         self.indices().into_iter().flatten().collect()
     }
+}
+
+
+
+pub fn set_vulkan_debug_name<T>(object: T, object_name: Option<&str>) -> Result<()>
+where T: DeviceOwned + VulkanObject {
+    if ENABLE_VALIDATION_LAYERS {
+        object.set_debug_utils_object_name(object_name)?;
+    }
+    Ok(())
 }

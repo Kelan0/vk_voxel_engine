@@ -1,4 +1,4 @@
-use crate::core::{CommandBuffer, CommandBufferImpl, Engine, GraphicsManager};
+use crate::core::{set_vulkan_debug_name, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager};
 use anyhow::Result;
 use png::{BitDepth, ColorType, OutputInfo};
 use smallvec::smallvec;
@@ -79,7 +79,7 @@ impl Texture {
             ..Default::default()
         };
         let image = Image::new(allocator, image_create_info, allocation_info)?;
-        image.set_debug_utils_object_name(name)?;
+        set_vulkan_debug_name(&image, name)?;
 
         Ok(image)
     }
@@ -96,7 +96,7 @@ impl Texture {
         };
 
         let image_view = ImageView::new(image, image_view_create_info)?;
-        image_view.set_debug_utils_object_name(name)?;
+        set_vulkan_debug_name(&image_view, name)?;
 
         Ok(image_view)
     }
@@ -294,7 +294,7 @@ impl TextureAtlas {
     pub fn create_staging_buffer(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Subbuffer<[u8]>> {
         let required_len = (self.atlas_width * self.atlas_height * 4) as DeviceSize;
         let buf = GraphicsManager::create_staging_subbuffer(allocator, required_len)?;
-        buf.buffer().set_debug_utils_object_name(Some("TextureAtlas-StagingBuffer"))?;
+        set_vulkan_debug_name(buf.buffer(), Some("TextureAtlas-StagingBuffer"))?;
         Ok(buf)
     }
 

@@ -61,7 +61,7 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 0,
+                chunk_load_radius: 12,
             }
         }
 
@@ -81,7 +81,7 @@ pub mod world {
                 let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
 
                 let allocator = engine.graphics.memory_allocator();
-                
+
                 let mut staging_buffer = GraphicsManager::create_staging_subbuffer(allocator, staging_size)?;
                 let mut subbuffer = Some(staging_buffer.clone());
 
@@ -401,7 +401,7 @@ pub mod world {
 
             Ok(())
         }
-        
+
         fn get_staging_buffer_size(&self) -> DeviceSize {
             if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
                 mesh_data.get_required_staging_buffer_size()
@@ -409,7 +409,7 @@ pub mod world {
                 0
             }
         }
-        
+
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
             let staging_size = self.get_staging_buffer_size();
             if let Some(mesh_data) = self.updated_mesh_data.take() {
@@ -417,7 +417,7 @@ pub mod world {
                 let allocator = engine.graphics.memory_allocator();
 
                 let staging_buffer = chop_buffer_at(staging_buffer, staging_size).unwrap();
-                
+
                 let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
 
                 engine.scene.ecs.modify_component(self.entity_id, |render_component: &mut RenderComponent<BaseVertex>| {
@@ -426,7 +426,7 @@ pub mod world {
 
                 self.mesh = Some(mesh);
             }
-            
+
             Ok(())
         }
 

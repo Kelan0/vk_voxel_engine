@@ -50,19 +50,29 @@ impl EventBus {
         self.read(r)
     }
 
-    pub fn read_one<E: Event>(&mut self, reader_id: &mut ReaderId<E>) -> Option<&E> {
+    pub fn read_one_ref<E: Event>(&mut self, reader_id: &mut ReaderId<E>) -> Option<&E> {
         self.read(reader_id).next()
     }
 
-    pub fn read_one_opt<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> Option<&E> {
+    pub fn read_one<E: Event>(&mut self, reader_id: &mut ReaderId<E>) -> Option<E>
+    where E: Clone {
+        self.read_one_ref(reader_id).cloned()
+    }
+
+    pub fn read_one_opt_ref<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> Option<&E> {
         self.read_opt(reader_id).next()
     }
 
+    pub fn read_one_opt<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> Option<E>
+    where E: Clone {
+        self.read_one_opt_ref(reader_id).cloned()
+    }
+
     pub fn has_any<E: Event>(&mut self, reader_id: &mut ReaderId<E>) -> bool {
-        self.read_one(reader_id).is_some()
+        self.read_one_ref(reader_id).is_some()
     }
 
     pub fn has_any_opt<E: Event>(&mut self, reader_id: &mut Option<ReaderId<E>>) -> bool {
-        self.read_one_opt(reader_id).is_some()
+        self.read_one_opt_ref(reader_id).is_some()
     }
 }

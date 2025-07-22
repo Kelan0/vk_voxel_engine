@@ -1,4 +1,4 @@
-use crate::core::{CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, MeshData};
+use crate::core::{set_vulkan_debug_name, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, MeshData};
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -105,8 +105,7 @@ impl <V: Vertex> Mesh<V> {
         };
 
         let vertex_buffer = Buffer::new_slice::<V>(allocator.clone(), buffer_create_info, allocation_info, vertex_count as DeviceSize)?;
-        vertex_buffer.buffer().set_debug_utils_object_name(Some("Mesh-VertexBuffer"))?;
-        // image.set_debug_utils_object_name(Some(format!("GraphicsManager-Swapchain-ColourImage({i})").as_str()))?;
+        set_vulkan_debug_name(vertex_buffer.buffer(), Some("Mesh-VertexBuffer"))?;
 
         Ok(vertex_buffer)
     }
@@ -134,7 +133,7 @@ impl <V: Vertex> Mesh<V> {
 
         // let buf = Buffer::from_iter(allocator.clone(), buffer_create_info, allocation_info, indices)?;
         let index_buffer = Buffer::new_slice::<u32>(allocator.clone(), buffer_create_info, allocation_info, index_count as DeviceSize)?;
-        index_buffer.buffer().set_debug_utils_object_name(Some("Mesh-IndexBuffer"))?;
+        set_vulkan_debug_name(index_buffer.buffer(), Some("Mesh-IndexBuffer"))?;
         Ok(index_buffer)
     }
     
@@ -147,7 +146,7 @@ impl <V: Vertex> Mesh<V> {
     fn create_and_upload_vertex_buffer_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, vertices: Vec<V>) -> Result<Subbuffer<[V]>> {
         let vertex_buffer = Self::create_vertex_buffer(allocator.clone(), vertices.len(), false)?;
         // let staging_buffer = GraphicsManager::create_staging_subbuffer::<V>(allocator, vertices.len() as DeviceSize)?;
-        // staging_buffer.buffer().set_debug_utils_object_name(Some("Mesh-VertexBuffer-StagingBuffer"))?;
+        // set_vulkan_debug_name(staging_buffer.buffer(), Some("Mesh-VertexBuffer-StagingBuffer"))?;
         GraphicsManager::upload_buffer_data_bytes_iter(&staging_buffer, vertices)?;
         cmd_buf.copy_buffer(CopyBufferInfo::buffers(staging_buffer.clone(), vertex_buffer.clone()))?;
         Ok(vertex_buffer)
@@ -172,7 +171,7 @@ impl <V: Vertex> Mesh<V> {
             Some(indices) => {
                 let index_buffer = Self::create_index_buffer(allocator.clone(), indices.len(), false)?;
                 // let staging_buffer = GraphicsManager::create_staging_subbuffer::<u32>(allocator, indices.len() as DeviceSize)?;
-                // staging_buffer.buffer().set_debug_utils_object_name(Some("Mesh-IndexBuffer-StagingBuffer"))?;
+                // set_vulkan_debug_name(staging_buffer.buffer(), Some("Mesh-IndexBuffer-StagingBuffer"))?;
                 GraphicsManager::upload_buffer_data_bytes_iter(&staging_buffer, indices)?;
                 cmd_buf.copy_buffer(CopyBufferInfo::buffers(staging_buffer.clone(), index_buffer.clone()))?;
                 Some(index_buffer)

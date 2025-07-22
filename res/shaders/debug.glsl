@@ -10,29 +10,6 @@ struct CameraData {
 
 struct ObjectData {
     mat4 modelMatrix;
-    uint materialIndex;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
-};
-
-//struct Material {
-//    uint albedoTextureIndex;
-//    uint roughnessTextureIndex;
-//    uint metallicTextureIndex;
-//    uint emissionTextureIndex;
-//    uint normalTextureIndex;
-//    uint packedAlbedoColour;
-//    uint packedRoughnessMetallicEmissionR;
-//    uint packedEmissionGB;
-//    uint flags;
-//    uint _pad0;
-//    uint _pad2;
-//    uint _pad3;
-//};
-
-struct Material {
-    uint textureIndex;
 };
 
 
@@ -53,11 +30,8 @@ layout(std140, set = 1, binding = 1) readonly buffer ObjectIndexBuffer {
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec3 colour;
-layout(location = 3) in vec2 texture;
 
 layout(location = 0) out vec3 fs_colour;
-layout(location = 1) out vec2 fs_texture;
-layout(location = 6) out flat uint fs_materialIndex;
 
 void main() {
     uint objectIndex = objectIndices[gl_InstanceIndex / 4][gl_InstanceIndex % 4];
@@ -66,7 +40,6 @@ void main() {
     uint materialIndex = objects[objectIndex].materialIndex;
 
     fs_colour = vec3(normalize(normal) * 0.5 + 0.5);
-    fs_texture = texture;
     fs_materialIndex = materialIndex;
 
     gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(position, 1.0);
@@ -77,31 +50,16 @@ void main() {
 
 #ifdef FRAGMENT_SHADER_MODULE
 layout(location = 0) in vec3 fs_colour;
-layout(location = 1) in vec2 fs_texture;
-layout(location = 6) in flat uint fs_materialIndex;
 
 
 layout(location = 0) out vec4 out_color;
 
-layout(set = 2, binding = 0) uniform sampler2D textures[256];
-
-layout(set = 2, binding = 1) readonly buffer MaterialDataBuffer {
-    Material objectMaterials[];
-};
-
 
 void main() {
 
-#ifdef WIREFRAME_ENABLED
-    out_color = vec4(1.0, 1.0, 1.0, 1.0);
-#else
-
     Material material = objectMaterials[fs_materialIndex];
 
-    vec3 texColour = abs(texture(textures[material.textureIndex], fs_texture).rgb);
-
-    out_color = vec4(texColour, 1.0);
-#endif
+    out_color = vec4(fs_colour, 1.0);
 
 }
 #endif

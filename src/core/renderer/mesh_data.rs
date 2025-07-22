@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use crate::core::{CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
+use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
 use anyhow::{Result};
 use glam::Vec3;
 use std::sync::Arc;
@@ -98,7 +98,7 @@ impl <V: Vertex> MeshData<V> {
     pub fn create_staging_buffer(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Subbuffer<[u8]>>{
         let required_len = self.get_required_staging_buffer_size();
         let buf = GraphicsManager::create_staging_subbuffer(allocator, required_len)?;
-        buf.buffer().set_debug_utils_object_name(Some("MeshData-StagingBuffer"))?;
+        set_vulkan_debug_name(buf.buffer(), Some("MeshData-StagingBuffer"))?;
         Ok(buf)
     }
     
