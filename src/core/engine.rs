@@ -2,7 +2,7 @@ use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::BeginFrameResult;
 use crate::core::scene::Scene;
-use crate::core::{CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer};
+use crate::core::{debug_mesh, CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -219,6 +219,8 @@ impl Tickable for Engine {
         let self_ptr: *mut Self = self;
 
         self.graphics.init()?;
+
+        debug_mesh::init(&self.graphics)?;
 
         unsafe { self.scene_renderer.init(&mut *self_ptr) }?;
 

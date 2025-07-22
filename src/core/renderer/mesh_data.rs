@@ -1,11 +1,10 @@
-use std::fmt::{Debug, Formatter};
-use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration};
-use anyhow::{Result};
-use glam::Vec3;
-use std::sync::Arc;
+use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType};
+use anyhow::Result;
 use ash::vk::DeviceSize;
+use glam::Vec3;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use vulkano::buffer::Subbuffer;
-use vulkano::device::DeviceOwnedVulkanObject;
 use vulkano::memory::allocator::{align_up, MemoryAllocator};
 use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
@@ -14,8 +13,10 @@ use vulkano::pipeline::graphics::vertex_input::Vertex;
 pub struct MeshData<V: Vertex> {
     pub vertices: Vec<V>,
     pub indices: Vec<u32>,
+    primitive_type: MeshPrimitiveType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisDirection {
     NegX,
     PosX,
@@ -25,10 +26,14 @@ pub enum AxisDirection {
     PosZ,
 }
 
+
 impl <V: Vertex> MeshData<V> {
 
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(primitive_type: MeshPrimitiveType) -> Self {
+        MeshData{
+            primitive_type,
+            ..Default::default()
+        }
     }
 
     pub fn add_vertex(&mut self, vertex: V) -> u32 {
@@ -38,13 +43,35 @@ impl <V: Vertex> MeshData<V> {
     }
 
     pub fn add_triangle(&mut self, i0: u32, i1: u32, i2: u32) -> u32 {
-        self.create_triangle_primitive(i0, i1, i2)
+        match self.primitive_type {
+            MeshPrimitiveType::TriangleList => {
+                self.create_triangle_primitive(i0, i1, i2)
+            },
+            MeshPrimitiveType::LineList => {
+                let i = self.create_line_primitive(i0, i1);
+                let _ = self.create_line_primitive(i1, i2);
+                let _ = self.create_line_primitive(i2, i0);
+                i
+            }
+        }
+
     }
 
     pub fn add_quad(&mut self, i0: u32, i1: u32, i2: u32, i3: u32) -> u32 {
-        let i = self.create_triangle_primitive(i0, i1, i2);
-        let _ = self.create_triangle_primitive(i0, i2, i3);
-        i
+        match self.primitive_type {
+            MeshPrimitiveType::TriangleList => {
+                let i = self.create_triangle_primitive(i0, i1, i2);
+                let _ = self.create_triangle_primitive(i0, i2, i3);
+                i
+            }
+            MeshPrimitiveType::LineList => {
+                let i = self.create_line_primitive(i0, i1);
+                let _ = self.create_line_primitive(i1, i2);
+                let _ = self.create_line_primitive(i2, i3);
+                let _ = self.create_line_primitive(i3, i0);
+                i
+            }
+        }
     }
     
     pub fn create_quad(&mut self, v00: V, v01: V, v11: V, v10: V) -> (u32, u32) {
@@ -58,15 +85,25 @@ impl <V: Vertex> MeshData<V> {
     }
 
     fn create_triangle_primitive(&mut self, i0: u32, i1: u32, i2: u32) -> u32 {
+        debug_assert_eq!(self.primitive_type, MeshPrimitiveType::TriangleList);
         let index = self.indices.len() as u32;
         self.indices.push(i0);
         self.indices.push(i1);
         self.indices.push(i2);
         index
     }
+
+    fn create_line_primitive(&mut self, i0: u32, i1: u32) -> u32 {
+        debug_assert_eq!(self.primitive_type, MeshPrimitiveType::LineList);
+        let index = self.indices.len() as u32;
+        self.indices.push(i0);
+        self.indices.push(i1);
+        index
+    }
     
     pub fn build_mesh(self, allocator: Arc<dyn MemoryAllocator>) -> Result<Mesh<V>> {
         let mesh = Mesh::new(allocator, MeshConfiguration {
+            primitive_type: self.primitive_type,
             vertices: self.vertices,
             indices: Some(self.indices),
         })?;
@@ -76,6 +113,7 @@ impl <V: Vertex> MeshData<V> {
     
     pub fn build_mesh_staged(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>) -> Result<Mesh<V>> {
         let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, staging_buffer, MeshConfiguration {
+            primitive_type: self.primitive_type,
             vertices: self.vertices,
             indices: Some(self.indices),
         })?;
@@ -325,6 +363,7 @@ where V: Vertex {
 impl <V: Vertex> Default for MeshData<V> {
     fn default() -> Self {
         Self{
+            primitive_type: MeshPrimitiveType::TriangleList,
             vertices: vec![],
             indices: vec![],
         }
@@ -334,11 +373,11 @@ impl <V: Vertex> Default for MeshData<V> {
 impl<V> Debug for MeshData<V>
 where V: Vertex + Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MeshData{{\n\tvertices:[\n")?;
+        write!(f, "MeshData{{\n\tprimitive_type:{:?},\n\tvertices:[\n", self.primitive_type)?;
         for (i, vertex) in self.vertices.iter().enumerate() {
             write!(f, "\t\t[{i}] = {vertex:?}\n")?;
         }
-        write!(f, "],\n\tindices:[\n\t\t")?;
+        write!(f, "\t],\n\tindices:[\n\t\t")?;
         for (i, index) in self.indices.iter().enumerate() {
             if *index > 0 {
                 write!(f, ", ")?;

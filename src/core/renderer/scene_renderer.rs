@@ -209,6 +209,16 @@ pub enum WireframeMode {
     Both,
 }
 
+pub struct DebugRenderContext {
+    meshes: Vec<(Mesh<BaseVertex>, Transform)>
+}
+
+impl DebugRenderContext {
+    pub fn add_mesh(&mut self, mesh: Mesh<BaseVertex>, transform: Transform) {
+        self.meshes.push((mesh, transform));
+    }
+}
+
 impl SceneRenderer {
     pub fn new(graphics: &GraphicsManager) -> Result<Self> {
 
@@ -739,6 +749,7 @@ impl SceneRenderer {
     fn on_recreate_swapchain(&mut self, engine: &mut Engine) -> Result<()> {
         debug!("SceneRenderer - Recreate swapchain");
         self.create_main_graphics_pipeline(engine)?;
+        self.create_debug_graphics_pipeline(engine)?;
 
         self.init_resources(engine)?;
         
@@ -832,6 +843,61 @@ impl SceneRenderer {
 
         self.solid_graphics_pipeline = Some(main_graphics_pipeline);
         self.wire_graphics_pipeline = Some(wire_graphics_pipeline);
+
+        Ok(())
+    }
+
+    fn create_debug_graphics_pipeline(&mut self, engine: &Engine) -> Result<()> {
+        info!("Initialize debug GraphicsPipeline");
+
+        let device = engine.graphics.device();
+        let render_pass = engine.graphics.render_pass();
+
+        let mut shader_source = String::new();
+        let mut file = File::open("./res/shaders/debug.glsl")?;
+        file.read_to_string(&mut shader_source)?;
+
+        let mut options = CompileOptions::new()?;
+        options.add_macro_definition("VERTEX_SHADER_MODULE", None);
+        let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "debug.glsl::vert", "main", ShaderKind::Vertex, Some(&options))?;
+
+        let mut options = CompileOptions::new()?;
+        options.add_macro_definition("FRAGMENT_SHADER_MODULE", None);
+        let fs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "debug.glsl::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
+
+        let subpass_type = Subpass::from(render_pass.clone(), 0)
+            .ok_or_else(|| anyhow!("Failed to get subpass info for provided RenderPass"))?
+            .into();
+
+        let entry_points = HashMap::from_iter([(0, "main"), (1, "main") ]);
+
+        let debug_lines_graphics_pipeline = GraphicsPipelineBuilder::new(subpass_type, vec![vs.clone(), fs.clone()], entry_points.clone())
+            .add_flags(PipelineCreateFlags::ALLOW_DERIVATIVES)
+            .set_dynamic_states(vec![ DynamicState::Viewport ])
+            .set_input_assembly_state(InputAssemblyState{
+                topology: PrimitiveTopology::LineList,
+                ..Default::default()
+            })
+            .set_viewport_state(ViewportState::default())
+            .set_multisample_state(MultisampleState::default())
+            .set_rasterization_state(RasterizationState{
+                polygon_mode: PolygonMode::Fill,
+                cull_mode: CullMode::None,
+                front_face: FrontFace::CounterClockwise,
+                ..Default::default()
+            })
+            .set_depth_stencil_state(DepthStencilState{
+                depth: Some(DepthState{ write_enable: true, compare_op: CompareOp::Less }),
+                // depth_bounds: Some(0.0..=1.0),
+                ..Default::default()
+            })
+            .set_color_blend_state(ColorBlendState{
+                attachments: vec![ColorBlendAttachmentState::default()],
+                ..Default::default()
+            })
+            .build_pipeline::<BaseVertex>(device.clone())?;
+
+        self.debug_lines_graphics_pipeline = Some(debug_lines_graphics_pipeline);
 
         Ok(())
     }

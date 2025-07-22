@@ -1350,6 +1350,7 @@ dependencies = [
  "crossbeam",
  "foldhash",
  "glam 0.30.4",
+ "lazy_static",
  "log",
  "png",
  "pretty_env_logger",

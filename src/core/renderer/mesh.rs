@@ -10,6 +10,7 @@ use vulkano::pipeline::graphics::vertex_input::Vertex;
 use vulkano::DeviceSize;
 
 pub struct MeshConfiguration<V: Vertex> {
+    pub primitive_type: MeshPrimitiveType,
     pub vertices: Vec<V>,
     pub indices: Option<Vec<u32>>,
 }
@@ -28,9 +29,16 @@ impl<V: Vertex> MeshConfiguration<V> {
 
 #[derive(Clone, Debug)]
 pub struct Mesh<V: Vertex> {
+    primitive_type: MeshPrimitiveType,
     vertex_buffer: Subbuffer<[V]>,
     index_buffer: Option<Subbuffer<[u32]>>,
     resource_id: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshPrimitiveType {
+    TriangleList,
+    LineList
 }
 
 impl<V: Vertex> PartialEq<Self> for Mesh<V> {
@@ -56,12 +64,14 @@ impl<V: Vertex> Ord for Mesh<V> {
 impl <V: Vertex> Mesh<V> {
     pub fn new(allocator: Arc<dyn MemoryAllocator>, config: MeshConfiguration<V>) -> Result<Self> {
 
+        let primitive_type = config.primitive_type;
         let vertex_buffer = Self::create_and_upload_vertex_buffer(allocator.clone(), config.vertices)?;
         let index_buffer = Self::create_and_upload_index_buffer(allocator.clone(), config.indices)?;
         
         let resource_id = Engine::next_resource_id();
 
         let mesh = Mesh{
+            primitive_type,
             vertex_buffer,
             index_buffer,
             resource_id
@@ -71,11 +81,13 @@ impl <V: Vertex> Mesh<V> {
     }
     pub fn new_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, config: MeshConfiguration<V>) -> Result<Self> {
 
+        let primitive_type = config.primitive_type;
         let (vertex_buffer, index_buffer) = Self::init_buffers_staged(allocator, cmd_buf, staging_buffer, config)?;
 
         let resource_id = Engine::next_resource_id();
 
         let mesh = Mesh{
+            primitive_type,
             vertex_buffer,
             index_buffer,
             resource_id
@@ -216,22 +228,34 @@ impl <V: Vertex> Mesh<V> {
         staging_buffer.size() >= s0 + s1
     }
 
-    pub fn resource_id(&self) -> u64 {
-        self.resource_id
-    }
-    
     pub fn draw(&self, cmd_buf: &mut CommandBuffer, instance_count: u32, first_instance: u32) -> Result<()> {
 
         cmd_buf.bind_vertex_buffers(0, self.vertex_buffer.clone())?;
-        
+
         if let Some(index_buffer) = &self.index_buffer {
             cmd_buf.bind_index_buffer(index_buffer.clone())?;
             cmd_buf.draw_indexed(index_buffer.len() as u32, instance_count, 0, 0, first_instance)?;
         } else {
             cmd_buf.draw(self.vertex_buffer.len() as u32, instance_count, 0, first_instance)?;
         }
-        
+
         Ok(())
+    }
+
+    pub fn resource_id(&self) -> u64 {
+        self.resource_id
+    }
+
+    pub fn primitive_type(&self) -> MeshPrimitiveType {
+        self.primitive_type
+    }
+
+    pub fn vertex_buffer(&self) -> &Subbuffer<[V]> {
+        &self.vertex_buffer
+    }
+
+    pub fn index_buffer(&self) -> Option<&Subbuffer<[u32]>> {
+        self.index_buffer.as_ref()
     }
 }
 

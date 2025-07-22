@@ -9,7 +9,7 @@ pub mod world {
     use log::debug;
     use vulkano::buffer::Subbuffer;
     use vulkano::memory::allocator::MemoryAllocator;
-    use crate::core::{BaseVertex, CommandBuffer, Engine, Entity, GraphicsManager, Mesh, MeshData, RenderComponent, RenderType, Transform};
+    use crate::core::{BaseVertex, CommandBuffer, Engine, Entity, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform};
     use crate::core::util::util::chop_buffer_at;
 
     pub const CHUNK_SIZE_EXP: u32 = 5;
@@ -374,7 +374,7 @@ pub mod world {
             if self.dirty {
                 self.dirty = false;
 
-                let mut mesh_data = MeshData::<BaseVertex>::new();
+                let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
 
                 let p1 = (CHUNK_SIZE as f32) * 0.5;
                 mesh_data.create_cuboid([p1, p1, p1], [p1, p1, p1]);
@@ -402,14 +402,6 @@ pub mod world {
             Ok(())
         }
 
-        fn get_staging_buffer_size(&self) -> DeviceSize {
-            if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
-                mesh_data.get_required_staging_buffer_size()
-            } else {
-                0
-            }
-        }
-
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
             let staging_size = self.get_staging_buffer_size();
             if let Some(mesh_data) = self.updated_mesh_data.take() {
@@ -428,6 +420,14 @@ pub mod world {
             }
 
             Ok(())
+        }
+
+        fn get_staging_buffer_size(&self) -> DeviceSize {
+            if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
+                mesh_data.get_required_staging_buffer_size()
+            } else {
+                0
+            }
         }
 
         fn unload(&mut self, engine: &mut Engine) {

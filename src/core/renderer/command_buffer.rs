@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
@@ -233,6 +234,7 @@ pub struct AshCommandBuffer {
     device: ash::Device,
     cmd_buf: vk::CommandBuffer,
     debug_draw_commands: u32,
+    active_resources: Vec<Arc<dyn Any>>
 }
 
 impl AshCommandBuffer {
@@ -249,6 +251,7 @@ impl AshCommandBuffer {
             device,
             cmd_buf,
             debug_draw_commands: 0,
+            active_resources: vec![]
         }
     }
 
@@ -262,6 +265,14 @@ impl AshCommandBuffer {
 
     pub fn debug_draw_commands(&self) -> u32 {
         self.debug_draw_commands
+    }
+
+    pub fn add_active_resource(&mut self, resource: Arc<dyn Any>) {
+        self.active_resources.push(resource);
+    }
+
+    pub fn clear_active_resources(&mut self) {
+        self.active_resources.clear();
     }
 }
 

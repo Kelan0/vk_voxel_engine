@@ -98,7 +98,7 @@ void main() {
 
     Material material = objectMaterials[fs_materialIndex];
 
-    vec3 texColour = abs(texture(textures[material.textureIndex], fs_texture).rgb);
+    vec3 texColour = texture(textures[material.textureIndex], fs_texture).rgb;
 
     out_color = vec4(texColour, 1.0);
 #endif

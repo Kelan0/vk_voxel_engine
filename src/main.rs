@@ -5,7 +5,7 @@ mod util;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{AxisDirection, BaseVertex, CommandBuffer, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{AxisDirection, BaseVertex, CommandBuffer, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -63,6 +63,7 @@ impl TestGame {
         let indices = [0, 1, 2, 1, 3, 2];
 
         let mesh2 = Arc::new(Mesh::new(allocator.clone(), MeshConfiguration {
+            primitive_type: MeshPrimitiveType::TriangleList,
             vertices: Vec::from(vertices),
             indices: Some(Vec::from(indices)),
         })?);
@@ -134,7 +135,7 @@ impl App for TestGame {
         let c2 = texture_atlas.find_coords_for_cell("crafting_table_front").expect("crafting_table_front - Coords not found in texture atles");
         let c3 = texture_atlas.find_coords_for_cell("planks_oak").expect("planks_oak - Coords not found in texture atles");
 
-        let mut mesh_data: MeshData<BaseVertex> = MeshData::new();
+        let mut mesh_data: MeshData<BaseVertex> = MeshData::new(MeshPrimitiveType::TriangleList);
         // mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);
         mesh_data.create_box_face_textured(AxisDirection::NegX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
         mesh_data.create_box_face_textured(AxisDirection::PosX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);

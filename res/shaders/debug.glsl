@@ -37,10 +37,8 @@ void main() {
     uint objectIndex = objectIndices[gl_InstanceIndex / 4][gl_InstanceIndex % 4];
 
     mat4 modelMatrix = objects[objectIndex].modelMatrix;
-    uint materialIndex = objects[objectIndex].materialIndex;
 
     fs_colour = vec3(normalize(normal) * 0.5 + 0.5);
-    fs_materialIndex = materialIndex;
 
     gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(position, 1.0);
 }
@@ -56,11 +54,7 @@ layout(location = 0) out vec4 out_color;
 
 
 void main() {
-
-    Material material = objectMaterials[fs_materialIndex];
-
     out_color = vec4(fs_colour, 1.0);
-
 }
 #endif
 
