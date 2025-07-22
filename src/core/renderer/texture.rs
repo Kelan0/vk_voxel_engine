@@ -13,9 +13,11 @@ use vulkano::device::{Device, DeviceOwned, DeviceOwnedVulkanObject};
 use vulkano::format::Format;
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, LOD_CLAMP_NONE};
 use vulkano::image::view::{ImageView, ImageViewCreateInfo};
-use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageTiling, ImageType, ImageUsage, SampleCount};
+use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageType, ImageUsage, SampleCount};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator};
+use vulkano::sync::PipelineStages;
 use vulkano::DeviceSize;
+use crate::core::image_utils::{ImageTransition, QueueFamilyIndex};
 
 #[derive(Clone, Debug, Eq)]
 pub struct Texture {
@@ -119,7 +121,15 @@ impl Texture {
             ..CopyBufferToImageInfo::buffer_image(buffer.clone(), image.clone())
         };
 
+        ImageTransition::transition_layout(cmd_buf, image.clone(), ImageSubresourceRange::from_parameters(image.format(), 1, 1), 
+                                           ImageTransition::FromAny(QueueFamilyIndex::ignored(), PipelineStages::TOP_OF_PIPE), 
+                                           ImageTransition::TransferDst(QueueFamilyIndex::ignored()))?;
+
         cmd_buf.copy_buffer_to_image(copy_info)?;
+
+        ImageTransition::transition_layout(cmd_buf, image.clone(), ImageSubresourceRange::from_parameters(image.format(), 1, 1),
+                                           ImageTransition::TransferDst(QueueFamilyIndex::ignored()),
+                                           ImageTransition::ShaderReadOnly(QueueFamilyIndex::ignored(), PipelineStages::FRAGMENT_SHADER))?;
 
         Ok(())
     }
@@ -280,7 +290,7 @@ impl TextureAtlas {
 
         Ok(texture_atlas)
     }
-    
+
     pub fn create_staging_buffer(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Subbuffer<[u8]>> {
         let required_len = (self.atlas_width * self.atlas_height * 4) as DeviceSize;
         let buf = GraphicsManager::create_staging_subbuffer(allocator, required_len)?;
@@ -288,7 +298,7 @@ impl TextureAtlas {
         Ok(buf)
     }
 
-    pub fn begin_loading(&mut self, staging_buffer: Subbuffer<[u8]>) -> Result<()> {
+    pub fn begin_loading(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: Subbuffer<[u8]>) -> Result<()> {
         debug_assert_eq!(self.loading_ctx, None);
 
         let stride = (self.texture_size * self.texture_size * 4) as DeviceSize;
@@ -298,12 +308,24 @@ impl TextureAtlas {
             offset: 0,
             stride
         });
+
+        let image = self.texture.image();
+        ImageTransition::transition_layout(cmd_buf, image.clone(), ImageSubresourceRange::from_parameters(image.format(), image.mip_levels(), image.array_layers()), 
+                                           ImageTransition::FromAny(QueueFamilyIndex::ignored(), PipelineStages::TOP_OF_PIPE), 
+                                           ImageTransition::TransferDst(QueueFamilyIndex::ignored()))?;
+        
         Ok(())
     }
 
-    pub fn finish_loading(&mut self) {
+    pub fn finish_loading(&mut self, cmd_buf: &mut CommandBuffer) -> Result<()> {
         debug_assert_ne!(self.loading_ctx, None);
         self.loading_ctx = None;
+        
+        let image = self.texture.image();
+        ImageTransition::transition_layout(cmd_buf, image.clone(), ImageSubresourceRange::from_parameters(image.format(), image.mip_levels(), image.array_layers()),
+                                           ImageTransition::TransferDst(QueueFamilyIndex::ignored()),
+                                           ImageTransition::ShaderReadOnly(QueueFamilyIndex::ignored(), PipelineStages::FRAGMENT_SHADER))?;
+        Ok(())
     }
 
     pub fn load_texture_from_data<L>(&mut self, cmd_buf: &mut CommandBuffer, key: &str, column: u32, row: u32, data: &[u8]) -> Result<()> {
@@ -368,5 +390,101 @@ impl TextureAtlas {
 
     pub fn atlas_height(&self) -> u32 {
         self.atlas_height
+    }
+}
+
+
+pub mod image_utils {
+    use crate::core::{CommandBuffer, CommandBufferImpl};
+    use anyhow::Result;
+    use ash::vk;
+    use std::slice;
+    use std::sync::Arc;
+    use vulkano::image::{Image, ImageLayout, ImageSubresourceRange};
+    use vulkano::sync::{AccessFlags, DependencyFlags, ImageMemoryBarrier, PipelineStages, QueueFamilyOwnershipTransfer};
+
+    #[derive(Clone, Copy)]
+    pub struct QueueFamilyIndex(u32);
+
+    impl QueueFamilyIndex {
+        pub fn new(queue_family_index: u32) -> Self {
+            QueueFamilyIndex(queue_family_index)
+        }
+        pub fn ignored() -> Self {
+            QueueFamilyIndex(vk::QUEUE_FAMILY_IGNORED)
+        }
+
+        pub fn external() -> Self {
+            QueueFamilyIndex(vk::QUEUE_FAMILY_EXTERNAL)
+        }
+
+        pub fn queue_family_index(&self) -> u32 {
+            self.0
+        }
+    }
+
+    pub enum ImageTransition {
+        FromAny(QueueFamilyIndex, PipelineStages),
+        TransferDst(QueueFamilyIndex),
+        ShaderReadOnly(QueueFamilyIndex, PipelineStages),
+    }
+
+    impl ImageTransition {
+        pub fn layout(&self) -> ImageLayout {
+            match *self {
+                ImageTransition::FromAny(..) => ImageLayout::Undefined,
+                ImageTransition::TransferDst(..) => ImageLayout::TransferDstOptimal,
+                ImageTransition::ShaderReadOnly(..) => ImageLayout::ShaderReadOnlyOptimal,
+            }
+        }
+
+        pub fn access_mask(&self) -> AccessFlags {
+            match *self {
+                ImageTransition::FromAny(..) => AccessFlags::empty(),
+                ImageTransition::TransferDst(..) => AccessFlags::TRANSFER_WRITE,
+                ImageTransition::ShaderReadOnly(_, _) => AccessFlags::SHADER_READ
+            }
+        }
+
+        pub fn pipeline_stages(&self) -> PipelineStages {
+            match *self {
+                ImageTransition::FromAny(_, r) => r,
+                ImageTransition::TransferDst(..) => PipelineStages::ALL_TRANSFER,
+                ImageTransition::ShaderReadOnly(_, r) => r
+            }
+        }
+
+        pub fn queue_family_index(&self) -> u32 {
+            match *self {
+                ImageTransition::FromAny(r, ..) => r.queue_family_index(),
+                ImageTransition::TransferDst(r, ..) => r.queue_family_index(),
+                ImageTransition::ShaderReadOnly(r, ..) => r.queue_family_index()
+            }
+        }
+
+        pub fn transition_layout(cmd_buf: &mut CommandBuffer, image: Arc<Image>, subresource_range: ImageSubresourceRange, src_state: ImageTransition, dst_state: ImageTransition) -> Result<()> {
+
+            let queue_family_ownership_transfer = if src_state.queue_family_index() != vk::QUEUE_FAMILY_IGNORED && dst_state.queue_family_index() != vk::QUEUE_FAMILY_IGNORED {
+                Some(QueueFamilyOwnershipTransfer::ExclusiveBetweenLocal{ src_index: src_state.queue_family_index(), dst_index: dst_state.queue_family_index() })
+            } else {
+                None
+            };
+
+            let image_memory_barrier = ImageMemoryBarrier{
+                old_layout: src_state.layout(),
+                new_layout: dst_state.layout(),
+                src_access: src_state.access_mask(),
+                dst_access: dst_state.access_mask(),
+                queue_family_ownership_transfer,
+                subresource_range,
+                ..ImageMemoryBarrier::image(image)
+            };
+
+            let src_stage = src_state.pipeline_stages();
+            let dst_stage = dst_state.pipeline_stages();
+            cmd_buf.pipeline_barrier(src_stage, dst_stage, DependencyFlags::empty(), &[], &[], slice::from_ref(&image_memory_barrier))?;
+
+            Ok(())
+        }
     }
 }

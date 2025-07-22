@@ -428,8 +428,8 @@ impl CommandBufferImpl for AshCommandBuffer {
         let src_stage_mask = src_stage.into();
         let dst_stage_mask = dst_stage.into();
         let mut vk_memory_barriers = vec![vk::MemoryBarrier::default(); memory_barriers.len()];
-        let mut vk_buffer_memory_barriers = vec![vk::BufferMemoryBarrier::default(); memory_barriers.len()];
-        let mut vk_image_memory_barriers = vec![vk::ImageMemoryBarrier::default(); memory_barriers.len()];
+        let mut vk_buffer_memory_barriers = vec![vk::BufferMemoryBarrier::default(); buffer_memory_barriers.len()];
+        let mut vk_image_memory_barriers = vec![vk::ImageMemoryBarrier::default(); image_memory_barriers.len()];
 
         for (i, memory_barrier) in memory_barriers.iter().enumerate() {
             vk_memory_barriers[i] = vk::MemoryBarrier::default()

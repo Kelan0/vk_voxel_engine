@@ -122,12 +122,12 @@ impl App for TestGame {
         let mut texture_atlas = TextureAtlas::new(allocator.clone(), 16, 4, 4, Format::R8G8B8A8_UNORM, ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST, Some("TestGame-TextureAtlas"))?;
 
         let tex_staging_buffer = texture_atlas.create_staging_buffer(allocator.clone())?;
-        texture_atlas.begin_loading(tex_staging_buffer.clone())?;
+        texture_atlas.begin_loading(&mut cmd_buf, tex_staging_buffer.clone())?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_top", 0, 0, "res/textures/blocks/crafting_table_top.png")?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_side", 1, 0, "res/textures/blocks/crafting_table_side.png")?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "crafting_table_front", 0, 1, "res/textures/blocks/crafting_table_front.png")?;
         texture_atlas.load_texture_from_file(&mut cmd_buf, "planks_oak", 2, 3, "res/textures/blocks/planks_oak.png")?;
-        texture_atlas.finish_loading();
+        texture_atlas.finish_loading(&mut cmd_buf)?;
 
         let c0 = texture_atlas.find_coords_for_cell("crafting_table_top").expect("crafting_table_top - Coords not found in texture atles");
         let c1 = texture_atlas.find_coords_for_cell("crafting_table_side").expect("crafting_table_side - Coords not found in texture atles");
