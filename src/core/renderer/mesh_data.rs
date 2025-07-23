@@ -73,6 +73,11 @@ impl <V: Vertex> MeshData<V> {
             }
         }
     }
+
+    pub fn add_line(&mut self, i0: u32, i1: u32) -> u32 {
+        assert_eq!(self.primitive_type, MeshPrimitiveType::LineList);
+        self.create_line_primitive(i0, i1)
+    }
     
     pub fn create_quad(&mut self, v00: V, v01: V, v11: V, v10: V) -> (u32, u32) {
         let vert_idx = self.vertices.len() as u32;
@@ -110,6 +115,17 @@ impl <V: Vertex> MeshData<V> {
         
         Ok(mesh)
     }
+
+    pub fn build_mesh_ref(&self, allocator: Arc<dyn MemoryAllocator>) -> Result<Mesh<V>>
+    where V: Clone {
+        let mesh = Mesh::new(allocator, MeshConfiguration {
+            primitive_type: self.primitive_type,
+            vertices: self.vertices.to_vec(),
+            indices: Some(self.indices.to_vec()),
+        })?;
+
+        Ok(mesh)
+    }
     
     pub fn build_mesh_staged(self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>) -> Result<Mesh<V>> {
         let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, staging_buffer, MeshConfiguration {
@@ -118,6 +134,17 @@ impl <V: Vertex> MeshData<V> {
             indices: Some(self.indices),
         })?;
         
+        Ok(mesh)
+    }
+
+    pub fn build_mesh_staged_ref(&self, allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>) -> Result<Mesh<V>>
+    where V: Clone {
+        let mesh = Mesh::new_staged(allocator.clone(), cmd_buf, staging_buffer, MeshConfiguration {
+            primitive_type: self.primitive_type,
+            vertices: self.vertices.to_vec(),
+            indices: Some(self.indices.to_vec()),
+        })?;
+
         Ok(mesh)
     }
     
@@ -257,6 +284,113 @@ impl <V: Vertex + Default> MeshData<V> {
         self.texture_quad(index + 20, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         
         index
+    }
+
+    pub fn create_plane(&mut self, center: [f32; 3], u: [f32; 3], v: [f32; 3], extent: [f32; 2], cells: [u32; 2]) -> (u32, u32)
+    where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
+        let u = Vec3::from_slice(&u);
+        let v = Vec3::from_slice(&v);
+        let normal = Vec3::cross(v, u);
+        let n = normal.into();
+        let center = Vec3::from_slice(&center);
+
+        let vertex_idx = self.vertices.len() as u32;
+        let index_idx = self.indices.len() as u32;
+
+        let cells_u = cells[0];
+        let cells_v = cells[1];
+        let verts_u = cells_u + 1;
+        let verts_v = cells_v + 1;
+
+        let delta_u = extent[0] / cells_u as f32;
+        let delta_v = extent[1] / cells_v as f32;
+
+        let hu = cells_u as f32 * 0.5;
+        let hv = cells_v as f32 * 0.5;
+
+        for i in 0 .. verts_u {
+            let offset_u = delta_u * (i as f32 - hu);
+            let pos_u = u * offset_u;
+
+            for j in 0 .. verts_v {
+                let offset_v = delta_v * (j as f32 - hv);
+                let pos_v = v * offset_v;
+
+                let p = center + pos_u + pos_v;
+                self.vertex().pos(p.into()).normal(n).add();
+            }
+        }
+
+
+        for i in 0 ..cells_u {
+            let a = vertex_idx + (i * verts_v);
+            let b = vertex_idx + ((i + 1) * verts_v);
+
+            for j in 0 ..cells_v {
+                let i00 = a + j;
+                let i10 = b + j;
+                let i01 = a + (j + 1);
+                let i11 = b + (j + 1);
+
+                self.add_quad(i00, i01, i11, i10);
+            }
+        }
+
+        (vertex_idx, index_idx)
+    }
+
+    pub fn create_lines_grid(&mut self, center: [f32; 3], u: [f32; 3], v: [f32; 3], extent: [f32; 2], cells: [u32; 2]) -> (u32, u32)
+    where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
+        debug_assert_eq!(self.primitive_type, MeshPrimitiveType::LineList);
+
+        let u = Vec3::from_slice(&u);
+        let v = Vec3::from_slice(&v);
+        let normal = Vec3::cross(v, u);
+        let n = normal.into();
+        let center = Vec3::from_slice(&center);
+
+        let vertex_idx = self.vertices.len() as u32;
+        let index_idx = self.indices.len() as u32;
+
+        let cells_u = cells[0];
+        let cells_v = cells[1];
+        let verts_u = cells_u + 1;
+        let verts_v = cells_v + 1;
+
+        let delta_u = extent[0] / cells_u as f32;
+        let delta_v = extent[1] / cells_v as f32;
+
+        let hu = cells_u as f32 * 0.5;
+        let hv = cells_v as f32 * 0.5;
+
+        let pos_u0 = u * delta_u * -hu;
+        let pos_u1 = u * delta_u * hu;
+        let pos_v0 = v * delta_v * -hv;
+        let pos_v1 = v * delta_v * hv;
+
+        for i in 0 .. verts_u {
+            let offset_u = delta_u * (i as f32 - hu);
+            let pos_u = u * offset_u;
+
+            let p0 = center + pos_v0 + pos_u;
+            let p1 = center + pos_v1 + pos_u;
+            let i0 = self.vertex().pos(p0.into()).normal(n).add();
+            let i1 = self.vertex().pos(p1.into()).normal(n).add();
+            self.add_line(i0, i1);
+        }
+
+        for j in 0 .. verts_v {
+            let offset_v = delta_v * (j as f32 - hv);
+            let pos_v = v * offset_v;
+
+            let p0 = center + pos_u0 + pos_v;
+            let p1 = center + pos_u1 + pos_v;
+            let i0 = self.vertex().pos(p0.into()).normal(n).add();
+            let i1 = self.vertex().pos(p1.into()).normal(n).add();
+            self.add_line(i0, i1);
+        }
+
+        (vertex_idx, index_idx)
     }
 }
 

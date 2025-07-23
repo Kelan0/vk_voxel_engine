@@ -1,7 +1,7 @@
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
 use crate::core::renderer::command_buffer::CommandBuffer;
-use crate::core::util::util::get_raw_bytes;
+use crate::core::util::util;
 use crate::core::{AshCommandBuffer, CommandBufferImpl};
 use crate::{log_error_and_anyhow, log_error_and_throw};
 use anyhow::{anyhow, Result};
@@ -1771,7 +1771,7 @@ impl GraphicsManager {
 
         let mut idx = 0;
         for i in iter {
-            let src = get_raw_bytes(&i);
+            let src = util::get_raw_bytes(&i);
             let dst = &mut write[idx .. idx+src.len()];
             dst.clone_from_slice(src);
             idx += src.len();

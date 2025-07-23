@@ -1,7 +1,7 @@
 use bevy_ecs::component::Component;
 use glam::{Affine3A, Mat3, Mat3A, Mat4, Quat, Vec3, Vec3A};
 
-#[derive(Component, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     pub affine: Affine3A,
 }
@@ -113,8 +113,8 @@ impl Transform {
         self.transform(Affine3A::from_rotation_z(angle))
     }
 
-    pub fn scale(&mut self, scale: Vec3) {
-        self.transform(Affine3A::from_scale(scale));
+    pub fn scale(&mut self, scale: Vec3) -> &mut Transform {
+        self.transform(Affine3A::from_scale(scale))
     }
 
     pub fn set_scale(&mut self, scale: Vec3) -> &mut Transform {

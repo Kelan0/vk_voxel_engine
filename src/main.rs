@@ -54,10 +54,10 @@ impl TestGame {
     fn create_test_mesh(&mut self, allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
 
         let vertices = [
-            BaseVertex { position: [-0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 1.0, 1.0], texture: [0.0, 1.0] },
-            BaseVertex { position: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 1.0, 1.0], texture: [1.0, 1.0] },
-            BaseVertex { position: [-0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [0.0, 0.0, 1.0], texture: [0.0, 0.0] },
-            BaseVertex { position: [0.5, -0.5, 0.0], normal: [0.0, 0.0, 1.0], colour: [1.0, 0.0, 1.0], texture: [1.0, 0.0] },
+            BaseVertex { vs_position: [-0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [0.0, 1.0, 1.0], vs_texture: [0.0, 1.0] },
+            BaseVertex { vs_position: [0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [1.0, 1.0, 1.0], vs_texture: [1.0, 1.0] },
+            BaseVertex { vs_position: [-0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [0.0, 0.0, 1.0], vs_texture: [0.0, 0.0] },
+            BaseVertex { vs_position: [0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [1.0, 0.0, 1.0], vs_texture: [1.0, 0.0] },
         ];
 
         let indices = [0, 1, 2, 1, 3, 2];

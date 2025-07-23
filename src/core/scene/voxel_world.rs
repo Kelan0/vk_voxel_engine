@@ -5,12 +5,12 @@ pub mod world {
     use anyhow::Result;
     use ash::vk::DeviceSize;
     use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
-    use glam::{IVec3, UVec3, Vec3};
+    use glam::{IVec3, U8Vec4, UVec3, Vec3};
     use log::debug;
     use vulkano::buffer::Subbuffer;
     use vulkano::memory::allocator::MemoryAllocator;
-    use crate::core::{BaseVertex, CommandBuffer, Engine, Entity, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform};
-    use crate::core::util::util::chop_buffer_at;
+    use crate::core::{debug_mesh, AxisAlignedBoundingBox, BaseVertex, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, Entity, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform};
+    use crate::core::util::util;
 
     pub const CHUNK_SIZE_EXP: u32 = 5;
     pub const CHUNK_SIZE: u32 = 1 << CHUNK_SIZE_EXP;
@@ -61,7 +61,7 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 12,
+                chunk_load_radius: 4,
             }
         }
 
@@ -82,7 +82,7 @@ pub mod world {
 
                 let allocator = engine.graphics.memory_allocator();
 
-                let mut staging_buffer = GraphicsManager::create_staging_subbuffer(allocator, staging_size)?;
+                let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator, staging_size)?;
                 let mut subbuffer = Some(staging_buffer.clone());
 
                 for (_chunk_pos, chunk) in &mut self.loaded_chunks {
@@ -325,6 +325,18 @@ pub mod world {
                 chunk_edits.insert(block_pos, block);
             }
         }
+
+        pub fn draw_debug(&self, ctx: &mut DebugRenderContext) -> Result<()> {
+            for (_chunk_pos, chunk) in self.loaded_chunks.iter() {
+                chunk.draw_debug_bounds(ctx)?;
+            }
+
+            if let Some(chunk) = self.loaded_chunks.get(&self.player_chunk_pos) {
+                chunk.draw_debug_grid(ctx)?;
+            }
+
+            Ok(())
+        }
     }
 
     impl VoxelChunk {
@@ -376,8 +388,8 @@ pub mod world {
 
                 let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
 
-                let p1 = (CHUNK_SIZE as f32) * 0.5;
-                mesh_data.create_cuboid([p1, p1, p1], [p1, p1, p1]);
+                // let p1 = (CHUNK_SIZE as f32) * 0.5;
+                // mesh_data.create_cuboid([p1, p1, p1], [p1, p1, p1]);
 
                 for x in 0..CHUNK_BOUNDS.x {
                     let cx = x as f32 + 0.5;
@@ -396,19 +408,30 @@ pub mod world {
                     }
                 }
 
-                self.updated_mesh_data = Some(mesh_data);
+                if mesh_data.vertices.len() > 0 {
+                    self.updated_mesh_data = Some(mesh_data);
+                } else {
+                    self.updated_mesh_data = None;
+                }
             }
 
             Ok(())
         }
 
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
-            let staging_size = self.get_staging_buffer_size();
-            if let Some(mesh_data) = self.updated_mesh_data.take() {
+
+            let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
+            let mesh_data = self.updated_mesh_data.take();
+
+            if staging_size == 0 {
+                return Ok(())
+            }
+
+            if let Some(mesh_data) = mesh_data {
 
                 let allocator = engine.graphics.memory_allocator();
 
-                let staging_buffer = chop_buffer_at(staging_buffer, staging_size).unwrap();
+                let staging_buffer = util::chop_buffer_at(staging_buffer, staging_size).unwrap();
 
                 let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
 
@@ -441,6 +464,54 @@ pub mod world {
             for (pos, block) in block_edits {
                 self.set_block(pos, block);
             }
+        }
+
+        fn draw_debug_bounds(&self, ctx: &mut DebugRenderContext) -> Result<()> {
+            self.get_bounds().draw_debug(ctx)
+        }
+
+        fn draw_debug_grid(&self, ctx: &mut DebugRenderContext) -> Result<()> {
+            let bounds = self.get_bounds();
+
+            let h = bounds.half_extent();
+            let colour = U8Vec4::new(255, 0, 0, 255);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() + Vec3::X * h.x)
+                .rotate_y(f32::to_radians(90.0))
+                .scale(bounds.extent()), colour);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() - Vec3::X * h.x)
+                .rotate_y(f32::to_radians(90.0))
+                .scale(bounds.extent()), colour);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() + Vec3::Y * h.y)
+                .rotate_x(f32::to_radians(90.0))
+                .scale(bounds.extent()), colour);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() - Vec3::Y * h.y)
+                .rotate_x(f32::to_radians(90.0))
+                .scale(bounds.extent()), colour);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() + Vec3::Z * h.z)
+                .scale(bounds.extent()), colour);
+
+            ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
+                .translate(bounds.center() - Vec3::Z * h.z)
+                .scale(bounds.extent()), colour);
+
+
+            Ok(())
+        }
+
+        pub fn get_bounds(&self) -> AxisAlignedBoundingBox {
+            let pos0 = get_chunk_world_pos(self.chunk_pos);
+            let pos1 = get_chunk_world_pos(self.chunk_pos + IVec3::ONE);
+            AxisAlignedBoundingBox::new(pos0, pos1)
         }
     }
 

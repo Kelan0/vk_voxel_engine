@@ -11,7 +11,6 @@ pub(crate) use renderer::*;
 pub(crate) use scene::*;
 #[allow(unused_imports)]
 pub(crate) use event::*;
-pub(crate) use util::*;
 
 extern crate pretty_env_logger;
 // #[macro_use] extern crate log;

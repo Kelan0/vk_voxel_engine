@@ -50,10 +50,10 @@ layout(std140, set = 1, binding = 1) readonly buffer ObjectIndexBuffer {
     uvec4 objectIndices[];
 };
 
-layout(location = 0) in vec3 position;
-layout(location = 1) in vec3 normal;
-layout(location = 2) in vec3 colour;
-layout(location = 3) in vec2 texture;
+layout(location = 0) in vec3 vs_position;
+layout(location = 1) in vec3 vs_normal;
+layout(location = 2) in vec3 vs_colour;
+layout(location = 3) in vec2 vs_texture;
 
 layout(location = 0) out vec3 fs_colour;
 layout(location = 1) out vec2 fs_texture;
@@ -65,11 +65,11 @@ void main() {
     mat4 modelMatrix = objects[objectIndex].modelMatrix;
     uint materialIndex = objects[objectIndex].materialIndex;
 
-    fs_colour = colour;
-    fs_texture = texture;
+    fs_colour = vs_colour;
+    fs_texture = vs_texture;
     fs_materialIndex = materialIndex;
 
-    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(position, 1.0);
+    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position, 1.0);
 }
 #endif
 

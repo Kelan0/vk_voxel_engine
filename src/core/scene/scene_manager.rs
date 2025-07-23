@@ -85,6 +85,7 @@ impl Scene {
     pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
 
         self.world.update(engine)?;
+        self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
 
         Ok(())
     }
