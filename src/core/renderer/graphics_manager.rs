@@ -1,8 +1,7 @@
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
 use crate::core::renderer::command_buffer::CommandBuffer;
-use crate::core::util::util;
-use crate::core::{AshCommandBuffer, CommandBufferImpl};
+use crate::core::{util, AshCommandBuffer, CommandBufferImpl};
 use crate::{log_error_and_anyhow, log_error_and_throw};
 use anyhow::{anyhow, Result};
 use ash::{khr, vk};

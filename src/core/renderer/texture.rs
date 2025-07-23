@@ -352,19 +352,55 @@ impl TextureAtlas {
         Ok(())
     }
     
-    pub fn get_coords_for_cell(&self, column: u32, row: u32) -> [[f32; 2]; 2] {
-        let rw = 1.0 / self.atlas_width as f32;
-        let rh = 1.0 / self.atlas_height as f32;
-        let x0 = (column * self.texture_size) as f32 * rw;
-        let y0 = (row * self.texture_size) as f32 * rh;
-        let x1 = ((column + 1) * self.texture_size) as f32 * rw;
-        let y1 = ((row + 1) * self.texture_size) as f32 * rh;
+    pub fn get_coords_for_cell(&self, column: u32, row: u32) -> [[u32; 2]; 2] {
+        let x0 = column * self.texture_size;
+        let y0 = row * self.texture_size;
+        let x1 = (column + 1) * self.texture_size;
+        let y1 = (row + 1) * self.texture_size;
+        
         [[x0, y0], [x1, y1]]
     }
     
-    pub fn find_coords_for_cell(&self, key: &str) -> Option<[[f32; 2]; 2]> {
+    pub fn get_coords_for_cell_norm_f32(&self, column: u32, row: u32) -> [[f32; 2]; 2] {
+        let [[x0, y0], [x1, y1]] = self.get_coords_for_cell(column, row);
+        
+        let rw = 1.0 / self.atlas_width as f32;
+        let rh = 1.0 / self.atlas_height as f32;
+        let x0 = x0 as f32 * rw;
+        let y0 = y0 as f32 * rh;
+        let x1 = x1 as f32 * rw;
+        let y1 = y1 as f32 * rh;
+        
+        [[x0, y0], [x1, y1]]
+    }
+    
+    pub fn get_coords_for_cell_norm_u16(&self, column: u32, row: u32) -> [[u16; 2]; 2] {
+        let [[x0, y0], [x1, y1]] = self.get_coords_for_cell(column, row);
+        
+        let rw = 1.0 / self.atlas_width as f64;
+        let rh = 1.0 / self.atlas_height as f64;
+        let x0 = ((x0 as f64 * rw) * (u16::MAX as f64)) as u16;
+        let y0 = ((y0 as f64 * rh) * (u16::MAX as f64)) as u16;
+        let x1 = ((x1 as f64 * rw) * (u16::MAX as f64)) as u16;
+        let y1 = ((y1 as f64 * rh) * (u16::MAX as f64)) as u16;
+        
+        [[x0, y0], [x1, y1]]
+    }
+
+
+    pub fn find_coords_for_cell(&self, key: &str) -> Option<[[u32; 2]; 2]> {
         self.region_map.get(key).map(|&(column, row)| {
             self.get_coords_for_cell(column, row)
+        })
+    }
+    pub fn find_coords_for_cell_norm_f32(&self, key: &str) -> Option<[[f32; 2]; 2]> {
+        self.region_map.get(key).map(|&(column, row)| {
+            self.get_coords_for_cell_norm_f32(column, row)
+        })
+    }
+    pub fn find_coords_for_cell_norm_u16(&self, key: &str) -> Option<[[u16; 2]; 2]> {
+        self.region_map.get(key).map(|&(column, row)| {
+            self.get_coords_for_cell_norm_u16(column, row)
         })
     }
 

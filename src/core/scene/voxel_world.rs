@@ -1,16 +1,16 @@
 
 pub mod world {
-    use std::collections::VecDeque;
-    use std::sync::Arc;
     use anyhow::Result;
     use ash::vk::DeviceSize;
-    use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
+    use foldhash::HashMap;
+    use foldhash::HashMapExt;
     use glam::{IVec3, U8Vec4, UVec3, Vec3};
     use log::debug;
+
+    use std::sync::Arc;
     use vulkano::buffer::Subbuffer;
-    use vulkano::memory::allocator::MemoryAllocator;
-    use crate::core::{debug_mesh, AxisAlignedBoundingBox, BaseVertex, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, Entity, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform};
-    use crate::core::util::util;
+
+    use crate::core::{debug_mesh, util, AxisAlignedBoundingBox, BaseVertex, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform};
 
     pub const CHUNK_SIZE_EXP: u32 = 5;
     pub const CHUNK_SIZE: u32 = 1 << CHUNK_SIZE_EXP;

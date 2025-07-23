@@ -1,16 +1,14 @@
-use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
+use crate::core::{set_vulkan_debug_name, util, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
 use anyhow::Result;
 use ash::vk::DeviceSize;
 use glam::{Affine3A, Mat4, Vec3};
 use std::fmt::{Debug, Formatter};
 use std::ops::RangeBounds;
 use std::sync::Arc;
-use log::error;
 use vulkano::buffer::Subbuffer;
 use vulkano::memory::allocator::{align_up, MemoryAllocator};
 use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
-use crate::core::util::util;
 
 #[derive(Clone, PartialEq)]
 pub struct MeshData<V: Vertex> {
@@ -246,17 +244,20 @@ impl <V: Vertex + Default> MeshData<V> {
 
 impl <V: Vertex + Default> MeshData<V> {
 
-    pub fn texture_quad(&mut self, start_index: u32, pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2])
-    where V: VertexHasTexture<f32> {
+    pub fn texture_quad<T>(&mut self, start_index: u32, pos_btm_left: [T; 2], pos_btm_right: [T; 2], pos_top_right: [T; 2], pos_top_left: [T; 2])
+    where V: VertexHasTexture<T>,
+          T: Copy {
+
         self.vertices[start_index as usize].set_texture(pos_btm_left);
         self.vertices[(start_index + 1) as usize].set_texture(pos_btm_right);
         self.vertices[(start_index + 2) as usize].set_texture(pos_top_right);
         self.vertices[(start_index + 3) as usize].set_texture(pos_top_left);
     }
 
-    pub fn colour_vertices<R>(&mut self, range: R, colour: [f32; 4])
-    where V: VertexHasColour<f32>,
-          R: RangeBounds<u32> {
+    pub fn colour_vertices<R, T>(&mut self, range: R, colour: [T; 4])
+    where V: VertexHasColour<T>,
+          R: RangeBounds<u32>,
+          T: Copy {
 
         let (start, end) = util::get_range(range, self.vertices.len() as u32);
 
@@ -302,8 +303,10 @@ impl <V: Vertex + Default> MeshData<V> {
         }
     }
     
-    pub fn create_box_face_textured(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> (u32, u32)
-    where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
+    pub fn create_box_face_textured<T>(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32, tex_min: [T; 2], tex_max: [T; 2]) -> (u32, u32)
+    where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<T>,
+          T: Copy {
+
         const FLIP_Y: bool = true;
         let (vert_idx, index_idx) = self.create_box_face(direction, center, half_size, offset);
         if FLIP_Y {
@@ -327,8 +330,9 @@ impl <V: Vertex + Default> MeshData<V> {
         idx
     }
 
-    pub fn create_cuboid_textured(&mut self, center: [f32; 3], half_size: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> (u32, u32)
-    where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
+    pub fn create_cuboid_textured<T>(&mut self, center: [f32; 3], half_size: [f32; 3], tex_min: [T; 2], tex_max: [T; 2]) -> (u32, u32)
+    where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<T>,
+          T: Copy {
         
         let (vert_idx, index_idx) = self.create_cuboid(center, half_size);
         

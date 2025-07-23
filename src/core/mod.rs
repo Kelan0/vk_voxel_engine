@@ -4,7 +4,7 @@ mod engine;
 mod renderer;
 mod event;
 mod scene;
-mod util;
+pub mod util;
 
 pub(crate) use engine::*;
 pub(crate) use renderer::*;

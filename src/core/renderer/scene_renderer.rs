@@ -7,7 +7,7 @@ use bevy_ecs::entity::Entity;
 use bevy_ecs::prelude::Added;
 use bevy_ecs::query::With;
 use foldhash::HashMap;
-use glam::{Affine3A, Mat4, U8Vec4, Vec2, Vec3, Vec3A, Vec4};
+use glam::{Affine3A, Mat4, U16Vec2, U8Vec4, Vec2, Vec3, Vec3A, Vec4};
 use log::{debug, error, info};
 use rayon::slice::ParallelSliceMut;
 use shaderc::{CompileOptions, ShaderKind};
@@ -43,14 +43,14 @@ pub struct BaseVertex {
     pub vs_position: [f32; 3],
     #[format(R32G32B32_SFLOAT)]
     pub vs_normal: [f32; 3],
-    #[format(R32G32B32A32_SFLOAT)]
-    pub vs_colour: [f32; 4],
-    #[format(R32G32_SFLOAT)]
-    pub vs_texture: [f32; 2],
+    #[format(R8G8B8A8_UNORM)]
+    pub vs_colour: [u8; 4],
+    #[format(R16G16_UNORM)]
+    pub vs_texture: [u16; 2],
 }
 
 impl BaseVertex {
-    pub fn new(position: Vec3, normal: Vec3, colour: Vec4, texture: Vec2) -> Self {
+    pub fn new(position: Vec3, normal: Vec3, colour: U8Vec4, texture: U16Vec2) -> Self {
         BaseVertex {
             vs_position: [ position.x, position.y, position.z ],
             vs_normal: [ normal.x, normal.y, normal.z ],
@@ -65,8 +65,8 @@ impl Default for BaseVertex {
         BaseVertex {
             vs_position: [0.0; 3],
             vs_normal: [0.0; 3],
-            vs_colour: [1.0; 4],
-            vs_texture: [0.0; 2],
+            vs_colour: [255; 4],
+            vs_texture: [0; 2],
         }
     }
 }
@@ -101,22 +101,22 @@ impl VertexHasNormal<f32> for BaseVertex {
     }
 }
 
-impl VertexHasColour<f32> for BaseVertex {
-    fn colour(&self) -> &[f32; 4] {
+impl VertexHasColour<u8> for BaseVertex {
+    fn colour(&self) -> &[u8; 4] {
         &self.vs_colour
     }
 
-    fn set_colour(&mut self, colour: [f32; 4]) {
+    fn set_colour(&mut self, colour: [u8; 4]) {
         self.vs_colour = colour;
     }
 }
 
-impl VertexHasTexture<f32> for BaseVertex {
-    fn texture(&self) -> &[f32; 2] {
+impl VertexHasTexture<u16> for BaseVertex {
+    fn texture(&self) -> &[u16; 2] {
         &self.vs_texture
     }
 
-    fn set_texture(&mut self, texture: [f32; 2]) {
+    fn set_texture(&mut self, texture: [u16; 2]) {
         self.vs_texture = texture;
     }
 }

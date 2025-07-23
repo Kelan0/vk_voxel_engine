@@ -1,11 +1,10 @@
 mod application;
 mod core;
-mod util;
 
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{AxisDirection, BaseVertex, CommandBuffer, GraphicsManager, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -17,7 +16,6 @@ use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
 use std::fs;
 use std::sync::Arc;
-use vulkano::device::DeviceOwnedVulkanObject;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 
@@ -54,10 +52,10 @@ impl TestGame {
     fn create_test_mesh(&mut self, allocator: Arc<StandardMemoryAllocator>) -> Result<()>{
 
         let vertices = [
-            BaseVertex { vs_position: [-0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [0.0, 1.0, 1.0, 1.0], vs_texture: [0.0, 1.0] },
-            BaseVertex { vs_position: [0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [1.0, 1.0, 1.0, 1.0], vs_texture: [1.0, 1.0] },
-            BaseVertex { vs_position: [-0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [0.0, 0.0, 1.0, 1.0], vs_texture: [0.0, 0.0] },
-            BaseVertex { vs_position: [0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [1.0, 0.0, 1.0, 1.0], vs_texture: [1.0, 0.0] },
+            BaseVertex { vs_position: [-0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [255, 255, 255, 255], vs_texture: util::f32_to_u16_norm([0.0, 1.0]) },
+            BaseVertex { vs_position: [0.5, 0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [255, 255, 255, 255], vs_texture: util::f32_to_u16_norm([1.0, 1.0]) },
+            BaseVertex { vs_position: [-0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [255, 255, 255, 255], vs_texture: util::f32_to_u16_norm([0.0, 0.0]) },
+            BaseVertex { vs_position: [0.5, -0.5, 0.0], vs_normal: [0.0, 0.0, 1.0], vs_colour: [255, 255, 255, 255], vs_texture: util::f32_to_u16_norm([1.0, 0.0]) },
         ];
 
         let indices = [0, 1, 2, 1, 3, 2];
@@ -130,10 +128,10 @@ impl App for TestGame {
         texture_atlas.load_texture_from_file(&mut cmd_buf, "planks_oak", 2, 3, "res/textures/blocks/planks_oak.png")?;
         texture_atlas.finish_loading(&mut cmd_buf)?;
 
-        let c0 = texture_atlas.find_coords_for_cell("crafting_table_top").expect("crafting_table_top - Coords not found in texture atles");
-        let c1 = texture_atlas.find_coords_for_cell("crafting_table_side").expect("crafting_table_side - Coords not found in texture atles");
-        let c2 = texture_atlas.find_coords_for_cell("crafting_table_front").expect("crafting_table_front - Coords not found in texture atles");
-        let c3 = texture_atlas.find_coords_for_cell("planks_oak").expect("planks_oak - Coords not found in texture atles");
+        let c0 = texture_atlas.find_coords_for_cell_norm_u16("crafting_table_top").expect("crafting_table_top - Coords not found in texture atles");
+        let c1 = texture_atlas.find_coords_for_cell_norm_u16("crafting_table_side").expect("crafting_table_side - Coords not found in texture atles");
+        let c2 = texture_atlas.find_coords_for_cell_norm_u16("crafting_table_front").expect("crafting_table_front - Coords not found in texture atles");
+        let c3 = texture_atlas.find_coords_for_cell_norm_u16("planks_oak").expect("planks_oak - Coords not found in texture atles");
 
         let mut mesh_data: MeshData<BaseVertex> = MeshData::new(MeshPrimitiveType::TriangleList);
         // mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);

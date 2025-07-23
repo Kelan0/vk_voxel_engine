@@ -52,10 +52,10 @@ layout(std140, set = 1, binding = 1) readonly buffer ObjectIndexBuffer {
 
 layout(location = 0) in vec3 vs_position;
 layout(location = 1) in vec3 vs_normal;
-layout(location = 2) in vec3 vs_colour;
+layout(location = 2) in vec4 vs_colour;
 layout(location = 3) in vec2 vs_texture;
 
-layout(location = 0) out vec3 fs_colour;
+layout(location = 0) out vec4 fs_colour;
 layout(location = 1) out vec2 fs_texture;
 layout(location = 6) out flat uint fs_materialIndex;
 
@@ -76,7 +76,7 @@ void main() {
 
 
 #ifdef FRAGMENT_SHADER_MODULE
-layout(location = 0) in vec3 fs_colour;
+layout(location = 0) in vec4 fs_colour;
 layout(location = 1) in vec2 fs_texture;
 layout(location = 6) in flat uint fs_materialIndex;
 
