@@ -1,5 +1,7 @@
 pub mod util {
+    use std::ops::{Add, RangeBounds};
     use ash::vk::DeviceSize;
+    use num::{One, Zero};
     use vulkano::buffer::Subbuffer;
 
     pub fn get_raw_bytes<T>(data: &T) -> &[u8] {
@@ -31,5 +33,24 @@ pub mod util {
             return Some(first);
         }
         None
+    }
+
+    pub fn get_range<R, T>(range: R, len: T) -> (T, T)
+    where R: RangeBounds<T>,
+    T: Clone + Copy + One + Zero {
+
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(&s) => s,
+            std::ops::Bound::Excluded(&s) => s + One::one(),
+            std::ops::Bound::Unbounded => Zero::zero(),
+        };
+
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(&e) => e + One::one(), // inclusive range ends at e+1
+            std::ops::Bound::Excluded(&e) => e,
+            std::ops::Bound::Unbounded => len,
+        };
+
+        (start, end)
     }
 }

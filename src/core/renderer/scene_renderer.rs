@@ -1,25 +1,25 @@
-use std::any::Any;
 use crate::application::Ticker;
 use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, CleanupFrameResourcesEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
 use bevy_ecs::entity::Entity;
-use bevy_ecs::prelude::{Added, EntityWorldMut};
+use bevy_ecs::prelude::Added;
 use bevy_ecs::query::With;
 use foldhash::HashMap;
-use glam::{U8Vec4, Vec2, Vec3, Vec4};
+use glam::{Affine3A, Mat4, U8Vec4, Vec2, Vec3, Vec3A, Vec4};
 use log::{debug, error, info};
 use rayon::slice::ParallelSliceMut;
 use shaderc::{CompileOptions, ShaderKind};
 use shrev::ReaderId;
+use std::any::Any;
 use std::fs::File;
 use std::io::Read;
 use std::mem;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
-use vulkano::device::{Device, DeviceOwnedVulkanObject};
+use vulkano::device::Device;
 use vulkano::format::Format;
 use vulkano::image::sampler::Sampler;
 use vulkano::image::view::ImageView;
@@ -35,7 +35,6 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
-use crate::core::util::util;
 
 #[derive(BufferContents, Vertex, Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -44,18 +43,18 @@ pub struct BaseVertex {
     pub vs_position: [f32; 3],
     #[format(R32G32B32_SFLOAT)]
     pub vs_normal: [f32; 3],
-    #[format(R32G32B32_SFLOAT)]
-    pub vs_colour: [f32; 3],
+    #[format(R32G32B32A32_SFLOAT)]
+    pub vs_colour: [f32; 4],
     #[format(R32G32_SFLOAT)]
     pub vs_texture: [f32; 2],
 }
 
 impl BaseVertex {
-    pub fn new(position: Vec3, normal: Vec3, colour: Vec3, texture: Vec2) -> Self {
+    pub fn new(position: Vec3, normal: Vec3, colour: Vec4, texture: Vec2) -> Self {
         BaseVertex {
             vs_position: [ position.x, position.y, position.z ],
             vs_normal: [ normal.x, normal.y, normal.z ],
-            vs_colour: [ colour.x, colour.y, colour.z ],
+            vs_colour: [ colour.x, colour.y, colour.z, colour.w ],
             vs_texture: [ texture.x, texture.y ]
         }
     }
@@ -66,7 +65,7 @@ impl Default for BaseVertex {
         BaseVertex {
             vs_position: [0.0; 3],
             vs_normal: [0.0; 3],
-            vs_colour: [1.0; 3],
+            vs_colour: [1.0; 4],
             vs_texture: [0.0; 2],
         }
     }
@@ -79,6 +78,16 @@ impl VertexHasPosition<f32> for BaseVertex {
 
     fn set_position(&mut self, pos: [f32; 3]) {
         self.vs_position = pos;
+    }
+
+    fn transform_mat4(&mut self, transform: Mat4) {
+        let p = transform.transform_point3a(Vec3A::new(self.vs_position[0], self.vs_position[1], self.vs_position[2]));
+        self.vs_position = [p.x, p.y, p.z];
+    }
+
+    fn transform_affine(&mut self, transform: Affine3A) {
+        let p = transform.transform_point3a(Vec3A::new(self.vs_position[0], self.vs_position[1], self.vs_position[2]));
+        self.vs_position = [p.x, p.y, p.z];
     }
 }
 
@@ -93,11 +102,11 @@ impl VertexHasNormal<f32> for BaseVertex {
 }
 
 impl VertexHasColour<f32> for BaseVertex {
-    fn colour(&self) -> &[f32; 3] {
+    fn colour(&self) -> &[f32; 4] {
         &self.vs_colour
     }
 
-    fn set_colour(&mut self, colour: [f32; 3]) {
+    fn set_colour(&mut self, colour: [f32; 4]) {
         self.vs_colour = colour;
     }
 }

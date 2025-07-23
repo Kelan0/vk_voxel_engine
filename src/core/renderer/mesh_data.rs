@@ -1,19 +1,24 @@
-use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType};
+use crate::core::{set_vulkan_debug_name, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
 use anyhow::Result;
 use ash::vk::DeviceSize;
-use glam::Vec3;
+use glam::{Affine3A, Mat4, Vec3};
 use std::fmt::{Debug, Formatter};
+use std::ops::RangeBounds;
 use std::sync::Arc;
+use log::error;
 use vulkano::buffer::Subbuffer;
 use vulkano::memory::allocator::{align_up, MemoryAllocator};
 use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
+use crate::core::util::util;
 
 #[derive(Clone, PartialEq)]
 pub struct MeshData<V: Vertex> {
     pub vertices: Vec<V>,
     pub indices: Vec<u32>,
     primitive_type: MeshPrimitiveType,
+    transform_stack: Vec<Transform>,
+    current_transform: Transform
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +39,14 @@ impl <V: Vertex> MeshData<V> {
             primitive_type,
             ..Default::default()
         }
+    }
+
+    pub fn vertex_count(&self) -> u32 {
+        self.vertices.len() as u32
+    }
+
+    pub fn index_count(&self) -> u32 {
+        self.indices.len() as u32
     }
 
     pub fn add_vertex(&mut self, vertex: V) -> u32 {
@@ -104,6 +117,39 @@ impl <V: Vertex> MeshData<V> {
         self.indices.push(i0);
         self.indices.push(i1);
         index
+    }
+
+    pub fn push_transform(&mut self) -> u32 {
+        self.transform_stack.push(self.current_transform.clone());
+        self.vertices.len() as u32
+    }
+
+    pub fn pop_transform(&mut self) -> u32 {
+        debug_assert!(!self.transform_stack.is_empty(), "MeshData::pop_transform(): Stack underflow");
+        let transform = self.transform_stack.pop().unwrap();
+        self.current_transform = transform;
+        self.vertices.len() as u32
+    }
+
+    pub fn pop_transform_apply(&mut self, start_index: u32) -> u32
+    where V: VertexHasPosition<f32> {
+        self.apply_transform(start_index..);
+        self.pop_transform()
+    }
+
+    pub fn apply_transform<R>(&mut self, range: R)
+    where V: VertexHasPosition<f32>,
+          R: RangeBounds<u32> {
+
+        let (start, end) = util::get_range(range, self.vertices.len() as u32);
+
+        for i in start..end {
+            self.vertices[i as usize].transform_affine(self.current_transform.affine);
+        }
+    }
+
+    pub fn transform(&mut self) -> &mut Transform {
+        &mut self.current_transform
     }
     
     pub fn build_mesh(self, allocator: Arc<dyn MemoryAllocator>) -> Result<Mesh<V>> {
@@ -207,9 +253,20 @@ impl <V: Vertex + Default> MeshData<V> {
         self.vertices[(start_index + 2) as usize].set_texture(pos_top_right);
         self.vertices[(start_index + 3) as usize].set_texture(pos_top_left);
     }
-    
+
+    pub fn colour_vertices<R>(&mut self, range: R, colour: [f32; 4])
+    where V: VertexHasColour<f32>,
+          R: RangeBounds<u32> {
+
+        let (start, end) = util::get_range(range, self.vertices.len() as u32);
+
+        for i in start as usize ..end as usize {
+            self.vertices[i].set_colour(colour);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)] // grr >:(
-    pub fn create_quad_face(&mut self, center: [f32; 3], pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2], left: [f32; 3], up: [f32; 3], offset: f32) -> u32
+    pub fn create_quad_face(&mut self, center: [f32; 3], pos_btm_left: [f32; 2], pos_btm_right: [f32; 2], pos_top_right: [f32; 2], pos_top_left: [f32; 2], left: [f32; 3], up: [f32; 3], offset: f32) -> (u32, u32)
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
         let up = Vec3::from_slice(&up);
         let left = Vec3::from_slice(&left);
@@ -226,11 +283,10 @@ impl <V: Vertex + Default> MeshData<V> {
         let v11 = self.vertex().pos(pos_top_right.into()).normal(normal.into()).get();
         let v10 = self.vertex().pos(pos_top_left.into()).normal(normal.into()).get();
         
-        let (idx, _) = self.create_quad(v00, v01, v11, v10);
-        idx
+         self.create_quad(v00, v01, v11, v10)
     }
     
-    pub fn create_box_face(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32) -> u32
+    pub fn create_box_face(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32) -> (u32, u32)
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
         let pos_min = [-half_size[0], -half_size[1]];
@@ -246,44 +302,44 @@ impl <V: Vertex + Default> MeshData<V> {
         }
     }
     
-    pub fn create_box_face_textured(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
+    pub fn create_box_face_textured(&mut self, direction: AxisDirection, center: [f32; 3], half_size: [f32; 2], offset: f32, tex_min: [f32; 2], tex_max: [f32; 2]) -> (u32, u32)
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
         const FLIP_Y: bool = true;
-        let index = self.create_box_face(direction, center, half_size, offset);
+        let (vert_idx, index_idx) = self.create_box_face(direction, center, half_size, offset);
         if FLIP_Y {
-            self.texture_quad(index, [tex_min[0], tex_max[1]], [tex_max[0], tex_max[1]], [tex_max[0], tex_min[1]], [tex_min[0], tex_min[1]]);
+            self.texture_quad(vert_idx, [tex_min[0], tex_max[1]], [tex_max[0], tex_max[1]], [tex_max[0], tex_min[1]], [tex_min[0], tex_min[1]]);
         } else {
-            self.texture_quad(index, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+            self.texture_quad(vert_idx, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
         }
-        index
+        (vert_idx, index_idx)
     }
 
-    pub fn create_cuboid(&mut self, center: [f32; 3], half_size: [f32; 3]) -> u32
+    pub fn create_cuboid(&mut self, center: [f32; 3], half_size: [f32; 3]) -> (u32, u32)
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> {
 
-        let index = 
-        self.create_box_face(AxisDirection::NegX, center, [half_size[1], half_size[2]], half_size[0]);
+        let idx =
+            self.create_box_face(AxisDirection::NegX, center, [half_size[1], half_size[2]], half_size[0]);
         self.create_box_face(AxisDirection::PosX, center, [half_size[1], half_size[2]], half_size[0]);
         self.create_box_face(AxisDirection::NegY, center, [half_size[0], half_size[2]], half_size[1]);
         self.create_box_face(AxisDirection::PosY, center, [half_size[0], half_size[2]], half_size[1]);
         self.create_box_face(AxisDirection::NegZ, center, [half_size[0], half_size[1]], half_size[2]);
         self.create_box_face(AxisDirection::PosZ, center, [half_size[0], half_size[1]], half_size[2]);
-        index
+        idx
     }
 
-    pub fn create_cuboid_textured(&mut self, center: [f32; 3], half_size: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> u32
+    pub fn create_cuboid_textured(&mut self, center: [f32; 3], half_size: [f32; 3], tex_min: [f32; 2], tex_max: [f32; 2]) -> (u32, u32)
     where V: VertexHasPosition<f32> + VertexHasNormal<f32> + VertexHasTexture<f32> {
         
-        let index = self.create_cuboid(center, half_size);
+        let (vert_idx, index_idx) = self.create_cuboid(center, half_size);
         
-        self.texture_quad(index, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        self.texture_quad(index + 4, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        self.texture_quad(index + 8, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        self.texture_quad(index + 12, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        self.texture_quad(index + 16, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        self.texture_quad(index + 20, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
-        
-        index
+        self.texture_quad(vert_idx, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(vert_idx + 4, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(vert_idx + 8, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(vert_idx + 12, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(vert_idx + 16, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+        self.texture_quad(vert_idx + 20, [tex_min[0], tex_min[1]], [tex_max[0], tex_min[1]], [tex_max[0], tex_max[1]], [tex_min[0], tex_max[1]]);
+
+        (vert_idx, index_idx)
     }
 
     pub fn create_plane(&mut self, center: [f32; 3], u: [f32; 3], v: [f32; 3], extent: [f32; 2], cells: [u32; 2]) -> (u32, u32)
@@ -372,6 +428,7 @@ impl <V: Vertex + Default> MeshData<V> {
             let offset_u = delta_u * (i as f32 - hu);
             let pos_u = u * offset_u;
 
+            // Vertical line
             let p0 = center + pos_v0 + pos_u;
             let p1 = center + pos_v1 + pos_u;
             let i0 = self.vertex().pos(p0.into()).normal(n).add();
@@ -383,6 +440,7 @@ impl <V: Vertex + Default> MeshData<V> {
             let offset_v = delta_v * (j as f32 - hv);
             let pos_v = v * offset_v;
 
+            // Horizontal line
             let p0 = center + pos_u0 + pos_v;
             let p1 = center + pos_u1 + pos_v;
             let i0 = self.vertex().pos(p0.into()).normal(n).add();
@@ -401,6 +459,8 @@ impl <V: Vertex + Default> MeshData<V> {
 pub trait VertexHasPosition<T>: Default {
     fn position(&self) -> &[T; 3];
     fn set_position(&mut self, pos: [T; 3]);
+    fn transform_mat4(&mut self, transform: Mat4);
+    fn transform_affine(&mut self, transform: Affine3A);
 }
 
 pub trait VertexHasNormal<T>: Default {
@@ -409,8 +469,8 @@ pub trait VertexHasNormal<T>: Default {
 }
 
 pub trait VertexHasColour<T>: Default {
-    fn colour(&self) -> &[T; 3];
-    fn set_colour(&mut self, colour: [T; 3]);
+    fn colour(&self) -> &[T; 4];
+    fn set_colour(&mut self, colour: [T; 4]);
 }
 
 pub trait VertexHasTexture<T>: Default {
@@ -475,7 +535,7 @@ where V: Vertex {
 
 impl <'a, V> VertexBuilder<'a, V>
 where V: Vertex {
-    pub fn colour<T>(mut self, colour: [T; 3]) -> Self
+    pub fn colour<T>(mut self, colour: [T; 4]) -> Self
     where
         V: VertexHasColour<T> {
         self.vertex.set_colour(colour);
@@ -498,8 +558,10 @@ impl <V: Vertex> Default for MeshData<V> {
     fn default() -> Self {
         Self{
             primitive_type: MeshPrimitiveType::TriangleList,
+            transform_stack: vec![],
             vertices: vec![],
             indices: vec![],
+            current_transform: Transform::default(),
         }
     }
 }
