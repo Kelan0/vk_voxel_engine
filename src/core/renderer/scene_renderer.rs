@@ -25,7 +25,7 @@ use vulkano::image::sampler::Sampler;
 use vulkano::image::view::ImageView;
 use vulkano::image::ImageUsage;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter};
-use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
+use vulkano::pipeline::graphics::color_blend::{AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents};
 use vulkano::pipeline::graphics::depth_stencil::{CompareOp, DepthState, DepthStencilState};
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
@@ -1075,7 +1075,12 @@ impl SceneRenderer {
                 ..Default::default()
             })
             .set_color_blend_state(ColorBlendState{
-                attachments: vec![ColorBlendAttachmentState::default()],
+                attachments: vec![ColorBlendAttachmentState{
+                    blend: Some(AttachmentBlend::alpha()),
+                    color_write_mask: ColorComponents::all(),
+                    color_write_enable: true,
+                    ..Default::default()
+                } ],
                 ..Default::default()
             })
             .build_pipeline::<BaseVertex>(device.clone())?;

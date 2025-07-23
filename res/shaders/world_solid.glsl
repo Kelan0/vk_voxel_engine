@@ -81,7 +81,7 @@ layout(location = 1) in vec2 fs_texture;
 layout(location = 6) in flat uint fs_materialIndex;
 
 
-layout(location = 0) out vec4 out_color;
+layout(location = 0) out vec4 out_colour;
 
 layout(set = 2, binding = 0) uniform sampler2D textures[256];
 
@@ -93,14 +93,14 @@ layout(set = 2, binding = 1) readonly buffer MaterialDataBuffer {
 void main() {
 
 #ifdef WIREFRAME_ENABLED
-    out_color = vec4(1.0, 1.0, 1.0, 1.0);
+    out_colour = vec4(1.0, 1.0, 1.0, 1.0);
 #else
 
     Material material = objectMaterials[fs_materialIndex];
 
     vec3 texColour = texture(textures[material.textureIndex], fs_texture).rgb;
 
-    out_color = vec4(texColour, 1.0);
+    out_colour = vec4(texColour, 1.0);
 #endif
 
 }

@@ -85,6 +85,7 @@ pub mod debug_mesh {
 
         let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::LineList);
         mesh_data.create_cuboid_textured([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);
+        mesh_data.colour_vertices(.., [1.0, 1.0, 1.0, 1.0]);
         let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
         let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
         MESH_BOX_LINES.lock().expect("Failed to lock MESH_BOX_LINES").replace(Arc::new(mesh));
@@ -92,6 +93,7 @@ pub mod debug_mesh {
 
         let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::LineList);
         mesh_data.create_lines_grid([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [32, 32]);
+        mesh_data.colour_vertices(.., [1.0, 1.0, 1.0, 1.0]);
         let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
         let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
         MESH_GRID_32_LINES.lock().expect("Failed to lock MESH_GRID_32_LINES").replace(Arc::new(mesh));

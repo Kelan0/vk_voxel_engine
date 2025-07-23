@@ -474,7 +474,7 @@ pub mod world {
             let bounds = self.get_bounds();
 
             let h = bounds.half_extent();
-            let colour = U8Vec4::new(255, 0, 0, 255);
+            let colour = U8Vec4::new(255, 0, 0, 100);
 
             ctx.add_mesh(debug_mesh::mesh_grid_32_lines(), *Transform::new()
                 .translate(bounds.center() + Vec3::X * h.x)

@@ -39,9 +39,9 @@ layout(std140, set = 1, binding = 1) readonly buffer ObjectIndexBuffer {
 
 layout(location = 0) in vec3 vs_position;
 layout(location = 1) in vec3 vs_normal;
-layout(location = 2) in vec3 vs_colour;
+layout(location = 2) in vec4 vs_colour;
 
-layout(location = 0) out vec3 fs_colour;
+layout(location = 0) out vec4 fs_colour;
 
 void main() {
     uint objectIndex = objectIndices[gl_InstanceIndex / 4][gl_InstanceIndex % 4];
@@ -49,7 +49,7 @@ void main() {
     mat4 modelMatrix = objects[objectIndex].modelMatrix;
     uint colour = objects[objectIndex].colour;
 
-    fs_colour = vec3(colour_uint_to_vec4(colour));
+    fs_colour = vs_colour * vec4(colour_uint_to_vec4(colour));
 
     gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position, 1.0);
 }
@@ -58,14 +58,14 @@ void main() {
 
 
 #ifdef FRAGMENT_SHADER_MODULE
-layout(location = 0) in vec3 fs_colour;
+layout(location = 0) in vec4 fs_colour;
 
 
-layout(location = 0) out vec4 out_color;
+layout(location = 0) out vec4 out_colour;
 
 
 void main() {
-    out_color = vec4(fs_colour, 1.0);
+    out_colour = vec4(fs_colour);
 }
 #endif
 
