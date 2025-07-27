@@ -1,19 +1,19 @@
-use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot, Mat3, Mat4, Quat, Vec3};
 use vulkano::buffer::BufferContents;
 
 #[derive(Clone, PartialEq)]
 pub struct Camera {
-    position: Vec3,
-    orientation: Quat,
+    position: DVec3,
+    orientation: DQuat,
     fov: f32,
     aspect_ratio: f32,
     near_plane: f32,
     far_plane: f32,
     projection_changed: bool,
 
-    view_matrix: Mat4,
+    view_matrix: DMat4,
     projection_matrix: Mat4,
-    view_projection_matrix: Mat4,
+    view_projection_matrix: DMat4,
 }
 
 impl Camera {
@@ -49,29 +49,29 @@ impl Camera {
             }
         }
 
-        self.view_matrix = Mat4::from_rotation_translation(self.orientation, self.position);
+        self.view_matrix = DMat4::from_rotation_translation(self.orientation, self.position / 32.0);
         self.view_matrix = self.view_matrix.inverse();
-        self.view_projection_matrix = self.projection_matrix * self.view_matrix;
+        self.view_projection_matrix = self.projection_matrix.as_dmat4() * self.view_matrix;
     }
 
-    pub fn set_position(&mut self, position: Vec3) {
+    pub fn set_position(&mut self, position: DVec3) {
         self.position = position;
     }
 
-    pub fn move_position(&mut self, delta_position: Vec3) {
+    pub fn move_position(&mut self, delta_position: DVec3) {
         self.position += delta_position;
     }
 
-    pub fn set_orientation(&mut self, orientation: Quat) {
+    pub fn set_orientation(&mut self, orientation: DQuat) {
         self.orientation = orientation;
     }
 
-    pub fn add_rotation(&mut self, rotation: Quat) {
+    pub fn add_rotation(&mut self, rotation: DQuat) {
         self.orientation = rotation * self.orientation;
     }
 
-    pub fn set_rotation_euler(&mut self, pitch: f32, yaw: f32, roll: f32) {
-        self.set_orientation(Quat::from_euler(
+    pub fn set_rotation_euler(&mut self, pitch: f64, yaw: f64, roll: f64) {
+        self.set_orientation(DQuat::from_euler(
             EulerRot::XYZEx,
             pitch.to_radians(),
             yaw.to_radians(),
@@ -79,8 +79,8 @@ impl Camera {
         ));
     }
 
-    pub fn add_rotation_euler(&mut self, pitch: f32, yaw: f32, roll: f32) {
-        self.add_rotation(Quat::from_euler(
+    pub fn add_rotation_euler(&mut self, pitch: f64, yaw: f64, roll: f64) {
+        self.add_rotation(DQuat::from_euler(
             EulerRot::XYZEx,
             pitch.to_radians(),
             yaw.to_radians(),
@@ -88,17 +88,17 @@ impl Camera {
         ));
     }
 
-    pub fn look_at(&mut self, center: Vec3, up: Vec3) {
-        self.set_orientation(Quat::look_at_lh(self.position, center, up))
+    pub fn look_at(&mut self, center: DVec3, up: DVec3) {
+        self.set_orientation(DQuat::look_at_lh(self.position, center, up))
     }
 
-    pub fn look_to(&mut self, dir: Vec3, up: Vec3) {
-        self.set_orientation(Quat::look_to_lh(dir, up))
+    pub fn look_to(&mut self, dir: DVec3, up: DVec3) {
+        self.set_orientation(DQuat::look_to_lh(dir, up))
     }
 
-    pub fn set_pitch(&mut self, pitch: f32) {
+    pub fn set_pitch(&mut self, pitch: f64) {
         let (_, yaw, roll) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(
+        self.set_orientation(DQuat::from_euler(
             EulerRot::XYZEx,
             pitch.to_radians(),
             yaw.to_radians(),
@@ -106,9 +106,9 @@ impl Camera {
         ));
     }
 
-    pub fn set_yaw(&mut self, yaw: f32) {
+    pub fn set_yaw(&mut self, yaw: f64) {
         let (pitch, _, roll) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(
+        self.set_orientation(DQuat::from_euler(
             EulerRot::XYZEx,
             pitch.to_radians(),
             yaw.to_radians(),
@@ -116,9 +116,9 @@ impl Camera {
         ));
     }
 
-    pub fn set_roll(&mut self, roll: f32) {
+    pub fn set_roll(&mut self, roll: f64) {
         let (pitch, yaw, _) = self.euler_angles();
-        self.set_orientation(Quat::from_euler(
+        self.set_orientation(DQuat::from_euler(
             EulerRot::XYZEx,
             pitch.to_radians(),
             yaw.to_radians(),
@@ -154,11 +154,11 @@ impl Camera {
         self.set_near_far_plane(near_plane, far_plane);
     }
 
-    pub fn position(&self) -> Vec3 {
+    pub fn position(&self) -> DVec3 {
         self.position
     }
 
-    pub fn orientation(&self) -> Quat {
+    pub fn orientation(&self) -> DQuat {
         self.orientation
     }
 
@@ -182,28 +182,28 @@ impl Camera {
         self.far_plane.is_infinite()
     }
 
-    pub fn rotation_mat(&self) -> Mat3 {
-        Mat3::from_quat(self.orientation)
+    pub fn rotation_mat(&self) -> DMat3 {
+        DMat3::from_quat(self.orientation)
     }
 
-    pub fn x_axis(&self) -> Vec3 {
-        self.orientation * Vec3::X
+    pub fn x_axis(&self) -> DVec3 {
+        self.orientation * DVec3::X
     }
 
-    pub fn y_axis(&self) -> Vec3 {
-        self.orientation * Vec3::Y
+    pub fn y_axis(&self) -> DVec3 {
+        self.orientation * DVec3::Y
     }
 
-    pub fn z_axis(&self) -> Vec3 {
-        self.orientation * Vec3::Z
+    pub fn z_axis(&self) -> DVec3 {
+        self.orientation * DVec3::Z
     }
 
-    pub fn euler_angles(&self) -> (f32, f32, f32) {
+    pub fn euler_angles(&self) -> (f64, f64, f64) {
         let (pitch, yaw, roll) = self.orientation.to_euler(EulerRot::XYZEx);
         (pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees())
     }
 
-    pub fn pitch(&self) -> f32 {
+    pub fn pitch(&self) -> f64 {
         let (pitch, _, _) = self.orientation.to_euler(EulerRot::XYZEx);
         pitch.to_degrees()
 
@@ -212,7 +212,7 @@ impl Camera {
         // roll.to_degrees()
     }
 
-    pub fn yaw(&self) -> f32 {
+    pub fn yaw(&self) -> f64 {
         let (_, yaw, _) = self.orientation.to_euler(EulerRot::XYZEx);
         yaw.to_degrees()
 
@@ -221,7 +221,7 @@ impl Camera {
         // pitch.to_degrees()
     }
 
-    pub fn roll(&self) -> f32 {
+    pub fn roll(&self) -> f64 {
         let (_, _, roll) = self.orientation.to_euler(EulerRot::XYZEx);
         roll.to_degrees()
 
@@ -231,9 +231,9 @@ impl Camera {
     }
 
     pub fn update_camera_buffer(&self, camera_buffer: &mut CameraDataUBO) {
-        camera_buffer.set_view_matrix(&self.view_matrix);
+        camera_buffer.set_view_matrix(&self.view_matrix.as_mat4());
         camera_buffer.set_projection_matrix(&self.projection_matrix);
-        camera_buffer.set_view_projection_matrix(&self.view_projection_matrix);
+        camera_buffer.set_view_projection_matrix(&self.view_projection_matrix.as_mat4());
     }
 
     pub fn get_camera_buffer(&self) -> CameraDataUBO {
@@ -246,16 +246,16 @@ impl Camera {
 impl Default for Camera {
     fn default() -> Self {
         Camera {
-            position: Vec3::new(0.0, 0.0, 0.0),
-            orientation: Quat::IDENTITY,
+            position: DVec3::ZERO,
+            orientation: DQuat::IDENTITY,
             fov: 60.0,
             aspect_ratio: 4.0 / 3.0,
             near_plane: 0.01,
             far_plane: 100.0,
             projection_changed: true,
-            view_matrix: Mat4::IDENTITY,
+            view_matrix: DMat4::IDENTITY,
             projection_matrix: Mat4::IDENTITY,
-            view_projection_matrix: Mat4::IDENTITY,
+            view_projection_matrix: DMat4::IDENTITY,
         }
     }
 }

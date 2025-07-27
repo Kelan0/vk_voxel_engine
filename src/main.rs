@@ -1,28 +1,38 @@
 mod application;
 mod core;
 
+use std::any::type_name;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{set_default_env_var, util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
 use bevy_ecs::entity::Entity;
 use core::Engine;
-use glam::{IVec3, Vec3};
+use glam::{DVec3, IVec3, Vec3};
 use log::{debug, error, info};
 use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
-use std::fs;
+use std::{f64, fs};
 use std::sync::Arc;
+use std::time::Instant;
+use rand::distributions::Uniform;
+use rand::prelude::Distribution;
+use simdeez::avx2::Avx2;
+use simdeez::scalar::Scalar;
+use simdeez::Simd;
+use simdeez::sse2::Sse2;
+use simdeez::sse41::Sse41;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
+use wide::f32x8;
 
 struct TestGame {
-    camera_pitch: f32,
-    camera_yaw: f32,
-    move_speed: f32,
+    camera_pitch: f64,
+    camera_yaw: f64,
+    move_speed: f64,
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
     debug_stats: Vec<TickProfileStatistics>,
@@ -157,8 +167,8 @@ impl App for TestGame {
         // engine.scene_renderer.add_mesh(mesh);
 
         let camera = engine.scene_renderer.camera_mut();
-        camera.set_perspective(70.0, 4.0 / 3.0, 0.07, 2000.0);
-        camera.set_position(Vec3::new(1.0, 0.0, -3.0));
+        camera.set_perspective(70.0, 4.0 / 3.0, 0.1, 64.0);
+        camera.set_position(DVec3::new(1.0, 0.0, -3.0));
 
         let num_x = 10;
         let num_z = 100;
@@ -294,9 +304,9 @@ impl App for TestGame {
             let camera = engine.scene_renderer.camera_mut();
 
             let mouse_motion = window.input().relative_mouse_pos();
-            let delta_pitch = mouse_motion.y * 0.04;
-            let delta_yaw = mouse_motion.x * 0.04;
-            self.camera_pitch = f32::clamp(self.camera_pitch + delta_pitch, -90.0, 90.0);
+            let delta_pitch = (mouse_motion.y * 0.04) as f64;
+            let delta_yaw = (mouse_motion.x * 0.04) as f64;
+            self.camera_pitch = f64::clamp(self.camera_pitch + delta_pitch, -90.0, 90.0);
             self.camera_yaw += delta_yaw;
             if self.camera_yaw > 180.0 {
                 self.camera_yaw -= 360.0;
@@ -316,16 +326,16 @@ impl App for TestGame {
             }
 
             if window.input().mouse_pressed(MouseButton::Left) {
-                self.add_test_entity(&mut engine.scene, camera.position() + camera.z_axis() * 2.0);
+                self.add_test_entity(&mut engine.scene, (camera.position() + camera.z_axis() * 2.0).as_vec3());
             }
 
-            let up_axis = Vec3::Y;
+            let up_axis = DVec3::Y;
             let right_axis = camera.x_axis();
-            let forward_axis = Vec3::cross(camera.x_axis(), up_axis);
+            let forward_axis = DVec3::cross(camera.x_axis(), up_axis);
 
             camera.set_rotation_euler(self.camera_pitch, self.camera_yaw, 0.0);
 
-            let mut move_dir = Vec3::ZERO;
+            let mut move_dir = DVec3::ZERO;
             if window.input().key_down(Key::W) {
                 move_dir += forward_axis;
             }
@@ -346,8 +356,8 @@ impl App for TestGame {
             }
 
             if move_dir.length_squared() > 0.001 {
-                let move_speed = self.move_speed * ticker.delta_time() as f32;
-                move_dir = Vec3::normalize(move_dir) * move_speed;
+                let move_speed = self.move_speed * ticker.delta_time();
+                move_dir = DVec3::normalize(move_dir) * move_speed;
                 camera.move_position(move_dir);
             }
         }

@@ -56,7 +56,8 @@ layout(location = 2) in vec4 vs_colour;
 layout(location = 3) in vec2 vs_texture;
 
 layout(location = 0) out vec4 fs_colour;
-layout(location = 1) out vec2 fs_texture;
+layout(location = 1) out vec3 fs_normal;
+layout(location = 2) out vec2 fs_texture;
 layout(location = 6) out flat uint fs_materialIndex;
 
 void main() {
@@ -65,11 +66,17 @@ void main() {
     mat4 modelMatrix = objects[objectIndex].modelMatrix;
     uint materialIndex = objects[objectIndex].materialIndex;
 
+//    // view space normalMatrix = inverse(transpose(modelViewMatrix))
+//    mat3 normalMatrix = transpose(inverse(mat3(camera.viewMatrix) * mat3(modelMatrix)));
+    // world space normalMatrix = inverse(transpose(modelMatrix))
+    mat3 normalMatrix = transpose(inverse(mat3(modelMatrix)));
+
     fs_colour = vs_colour;
+    fs_normal = normalMatrix * vs_normal;
     fs_texture = vs_texture;
     fs_materialIndex = materialIndex;
 
-    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position, 1.0);
+    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position / 32.0, 1.0);
 }
 #endif
 
@@ -77,7 +84,8 @@ void main() {
 
 #ifdef FRAGMENT_SHADER_MODULE
 layout(location = 0) in vec4 fs_colour;
-layout(location = 1) in vec2 fs_texture;
+layout(location = 1) in vec3 fs_normal;
+layout(location = 2) in vec2 fs_texture;
 layout(location = 6) in flat uint fs_materialIndex;
 
 
@@ -99,8 +107,9 @@ void main() {
     Material material = objectMaterials[fs_materialIndex];
 
     vec3 texColour = texture(textures[material.textureIndex], fs_texture).rgb;
+    vec3 normal = vec3(fs_normal * 0.5 + 0.5);
 
-    out_colour = vec4(texColour, 1.0);
+    out_colour = vec4(normal, 1.0);
 #endif
 
 }

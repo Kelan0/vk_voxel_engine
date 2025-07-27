@@ -25,11 +25,22 @@ bevy_ecs = "0.16.1"
 rayon = "1.10.0"
 lazy_static = "1.5.0"
 num = "0.4.3"
+libnoise = "1.2.0"
+noise = "0.9.0"
+simdnoise = "3.1.6"
+simdeez = "=1.0.8"
+rand = "0.8.5"
+wide = "0.7.33"
+aligned = "0.4.2"
 #shipyard = "0.8.1"
 #tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "sync", "macros" ] }
 
+[dev-dependencies]
+criterion = "0.7.0"
+
 [build]
-rustflags = [ "-Ctarget-feature=+avx2" ]
+#rustflags = [ "-C target-feature=+avx2,+avx,+sse2,+avx512f,+avx512bw,+avx512vl", "-Ctarget-feature=+avx2", "-Ctarget-feature=+avx512vl", "-C target-cpu=native" ]
+rustflags = [ "-Ctarget-cpu=native", "-Ctarget-feature=+avx2", "-Ctarget-feature=+avx", "-Ctarget-feature=+avx512f", "-Ctarget-feature=+avx512bw", "-Ctarget-feature+avx512vl" ]
 
 #[profile.dev]
 #opt-level = 1
@@ -45,3 +56,9 @@ lto = "thin"
 codegen-units = 16
 debug = false
 panic = "unwind"
+
+
+
+[[bench]]
+name = "simd_test"
+harness = false

@@ -1,10 +1,10 @@
 use crate::application::Ticker;
-use crate::core::Engine;
+use crate::core::{Engine, WorldGenerator};
 use anyhow::Result;
 use bevy_ecs::bundle::Bundle;
 use bevy_ecs::component::Component;
 use bevy_ecs::world::{EntityWorldMut, World};
-use crate::core::world::VoxelWorld;
+use crate::core::scene::world::VoxelWorld;
 
 pub struct Scene {
     pub ecs: World,
@@ -42,7 +42,8 @@ impl <'a> Entity<'a> {
 impl Scene {
     pub fn new() -> Result<Self> {
         let ecs = World::new();
-        let world = VoxelWorld::new();
+        let world_generator = WorldGenerator::new(WorldGenerator::default_terrain_generator(99));
+        let world = VoxelWorld::new(world_generator);
         Ok(Scene {
             ecs,
             world
@@ -84,7 +85,7 @@ impl Scene {
 
     pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
 
-        self.world.update(engine)?;
+        self.world.update(ticker, engine)?;
         self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
 
         Ok(())

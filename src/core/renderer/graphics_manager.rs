@@ -1700,6 +1700,20 @@ impl GraphicsManager {
 
     pub fn create_staging_subbuffer<T: BufferContents>(allocator: Arc<dyn MemoryAllocator>, len: DeviceSize) -> Result<Subbuffer<[T]>> {
 
+        assert!(len > 0);
+
+        const MB: DeviceSize = 1024 * 1024;
+        const MAX_STAGING_BUFFER_SIZE: DeviceSize = DeviceSize::MAX; // MB * 256 // TODO: chunked upload if the staging buffer is not large enough
+
+        let elem_size = size_of::<T>() as DeviceSize;
+        let requested_buffer_size = len * elem_size;
+
+        let len = if requested_buffer_size > MAX_STAGING_BUFFER_SIZE {
+            MAX_STAGING_BUFFER_SIZE / elem_size
+        } else {
+            len
+        };
+
         let buffer_create_info = BufferCreateInfo{
             usage: BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
             ..Default::default()

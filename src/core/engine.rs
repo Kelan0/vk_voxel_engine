@@ -262,7 +262,7 @@ impl Tickable for Engine {
     }
 }
 
-fn set_default_env_var(key: &str, value: &str) {
+pub fn set_default_env_var(key: &str, value: &str) {
     if std::env::var(key).is_err() {
         unsafe {
             std::env::set_var(key, value);

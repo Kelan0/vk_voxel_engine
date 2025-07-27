@@ -205,6 +205,8 @@ pub struct SceneRenderer {
     default_sampler: Arc<Sampler>,
 
     debug_render_context: DebugRenderContext,
+    max_debug_object_count: u32,
+
 }
 
 struct FrameResource {
@@ -317,7 +319,8 @@ impl SceneRenderer {
             null_texture,
             default_sampler,
 
-            debug_render_context: Default::default()
+            debug_render_context: Default::default(),
+            max_debug_object_count: 0,
 
         };
 
@@ -482,6 +485,8 @@ impl SceneRenderer {
             return Ok(())
         }
 
+        self.max_debug_object_count = Self::grow_capacity(self.max_debug_object_count, debug_object_count as u32, 1.5);
+
         // debug!("{} debug meshes", debug_object_count);
 
         let allocator = engine.graphics.memory_allocator();
@@ -514,8 +519,8 @@ impl SceneRenderer {
         let debug_lines_pipeline = self.debug_lines_graphics_pipeline.as_ref().unwrap();
         cmd_buf.bind_pipeline_graphics(debug_lines_pipeline.clone())?;
 
-        Self::map_debug_object_data_buffer(resource, debug_object_count, allocator.clone())?;
-        Self::map_debug_object_indices_buffer(resource, debug_object_count, allocator.clone())?;
+        Self::map_debug_object_data_buffer(resource, self.max_debug_object_count as usize, allocator.clone())?;
+        Self::map_debug_object_indices_buffer(resource, self.max_debug_object_count as usize, allocator.clone())?;
 
         let mut render_info = Vec::new();
         let mut object_data = Vec::new();
@@ -735,8 +740,9 @@ impl SceneRenderer {
     }
 
     fn grow_capacity(mut capacity: u32, required_capacity: u32, growth_rate: f64) -> u32 {
+        capacity = u32::max(1, capacity);
         while capacity < required_capacity {
-            capacity = (capacity as f64 * growth_rate) as u32
+            capacity = f64::ceil(capacity as f64 * growth_rate) as u32
         }
         capacity
     }

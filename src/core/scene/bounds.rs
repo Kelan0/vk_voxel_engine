@@ -1,14 +1,14 @@
 use crate::core::{DebugRenderContext, MeshPrimitiveType, Transform};
 use anyhow::Result;
-use glam::{U8Vec4, Vec3};
+use glam::{DVec3, U8Vec4};
 
 pub struct AxisAlignedBoundingBox {
-    pub min_coord: Vec3,
-    pub max_coord: Vec3
+    pub min_coord: DVec3,
+    pub max_coord: DVec3
 }
 
 impl AxisAlignedBoundingBox {
-    pub fn new(min_extent: Vec3, max_extent: Vec3) -> Self {
+    pub fn new(min_extent: DVec3, max_extent: DVec3) -> Self {
         AxisAlignedBoundingBox {
             min_coord: min_extent,
             max_coord: max_extent
@@ -17,23 +17,23 @@ impl AxisAlignedBoundingBox {
 }
 
 impl BoundingVolume for AxisAlignedBoundingBox {
-    fn center(&self) -> Vec3 {
+    fn center(&self) -> DVec3 {
         (self.min_coord + self.max_coord) * 0.5
     }
 
-    fn half_extent(&self) -> Vec3 {
+    fn half_extent(&self) -> DVec3 {
         self.extent() * 0.5
     }
 
-    fn extent(&self) -> Vec3 {
+    fn extent(&self) -> DVec3 {
         self.max_coord - self.min_coord
     }
 
-    fn min_coord(&self) -> Vec3 {
+    fn min_coord(&self) -> DVec3 {
         self.min_coord
     }
 
-    fn max_coord(&self) -> Vec3 {
+    fn max_coord(&self) -> DVec3 {
         self.max_coord
     }
 }
@@ -41,8 +41,8 @@ impl BoundingVolume for AxisAlignedBoundingBox {
 impl BoundingVolumeDebugDraw for AxisAlignedBoundingBox {
     fn draw_debug(&self, ctx: &mut DebugRenderContext) -> Result<()> {
         ctx.add_mesh(debug_mesh::mesh_box_lines(), *Transform::new()
-            .set_translation(self.center())
-            .set_scale(self.extent()),
+            .set_translation(self.center().as_vec3())
+            .set_scale(self.extent().as_vec3()),
         U8Vec4::new(255, 200, 128, 255));
         Ok(())
     }
@@ -50,15 +50,15 @@ impl BoundingVolumeDebugDraw for AxisAlignedBoundingBox {
 
 
 pub trait BoundingVolume {
-    fn center(&self) -> Vec3;
+    fn center(&self) -> DVec3;
 
-    fn half_extent(&self) -> Vec3;
+    fn half_extent(&self) -> DVec3;
 
-    fn extent(&self) -> Vec3;
+    fn extent(&self) -> DVec3;
 
-    fn min_coord(&self) -> Vec3;
+    fn min_coord(&self) -> DVec3;
 
-    fn max_coord(&self) -> Vec3;
+    fn max_coord(&self) -> DVec3;
 }
 
 pub trait BoundingVolumeDebugDraw {
@@ -70,8 +70,6 @@ pub mod debug_mesh {
     use anyhow::Result;
     use lazy_static::lazy_static;
     use std::sync::{Arc, Mutex};
-    use glam::Vec3;
-    use crate::core::world::CHUNK_BOUNDS;
 
     lazy_static! {
         // dirty mutable global state...
