@@ -226,7 +226,10 @@ impl ChunkLoader {
     /// Update the queues of chunks to load & unload. Keep the queues sorted by distance around the player position
     /// The load queue is sorted so the nearest chunks are loaded first, and the unload queue is sorted in the
     /// opposite direction.
-    pub fn update_chunk_queues(&mut self, center_chunk_pos: IVec3, chunk_load_radius: u32) -> Result<()> {
+    /// Can pass cancelled_fn as None::<fn(_)> if needed
+    pub fn update_chunk_queues<F>(&mut self, center_chunk_pos: IVec3, chunk_load_radius: u32, mut callback_fn: Option<F>) -> Result<()>
+    where F: FnMut(IVec3) {
+
         let center_pos = center_chunk_pos.as_dvec3();
 
         let mut shared_ctx = self.shared_ctx.lock()
@@ -254,7 +257,11 @@ impl ChunkLoader {
                 // chunk_load_queue is sorted by distance. If we encounter a chunk too far away, all remaining chunks are also too far away.
                 // Pop off all remaining items at the end of the queue
                 while shared_ctx.chunk_load_queue.len() > index {
-                    shared_ctx.chunk_load_queue.pop_back();
+                    if let Some(pos) = shared_ctx.chunk_load_queue.pop_back() {
+                        if let Some(callback) = callback_fn.as_mut() {
+                            callback(pos);
+                        }
+                    }
                 }
                 break;
             }
