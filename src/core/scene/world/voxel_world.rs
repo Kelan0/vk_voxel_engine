@@ -1,5 +1,6 @@
 
 pub mod world {
+    use std::any::Any;
     use anyhow::Result;
     use ash::vk::DeviceSize;
     use foldhash::HashMap;
@@ -107,9 +108,14 @@ pub mod world {
 
                 let allocator = engine.graphics.memory_allocator();
 
+                let mut res: Vec<Arc<dyn Any>> = vec![];
+                let mut fences = vec![];
 
                 let mut stage_count = 0;
                 let mut staging_offset = 0;
+
+                let mut subbuffer: Option<Subbuffer<[u8]>> = None;
+                let mut staged_bytes = 0;
 
                 let mut iter = self.loaded_chunks.iter_mut();
                 while let Some((_chunk_pos, chunk)) = iter.next() {
@@ -118,21 +124,35 @@ pub mod world {
                         continue;
                     }
                     let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
-                    let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator.clone(), max_staging_size)?;
-                    let mut subbuffer = Some(staging_buffer.clone());
+
+                    if let Some(buf) = subbuffer.as_ref() {
+                        if buf.size() < chunk.chunk_data.get_staging_buffer_size() {
+                            subbuffer = None;
+                        }
+                    }
+
+                    if subbuffer.is_none() {
+                        let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator.clone(), max_staging_size * 3)?;
+                        subbuffer = Some(staging_buffer.clone());
+                        res.push(staging_buffer.buffer().clone());
+                        stage_count += 1;
+                        staged_bytes += staging_buffer.size();
+                    }
 
                     chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
 
                     staging_offset += chunk.chunk_data.get_staging_buffer_size();
 
-                    engine.graphics.submit_transfer_commands(cmd_buf)?
-                        .wait(None)?;
-
-                    stage_count += 1;
+                    let fence = engine.graphics.submit_transfer_commands(cmd_buf)?;
+                    fences.push(fence);
                 }
 
-                let dur = t0.elapsed().as_secs_f64() * 1000.0;
-                debug!("Updated {count} chunks in {dur} msec - staging size: {max_staging_size} bytes");
+                for fence in fences {
+                    fence.wait(None)?
+                }
+
+                // let dur = t0.elapsed().as_secs_f64() * 1000.0;
+                // debug!("Updated {count} chunks in {dur} msec - staging size: {staged_bytes} bytes in {stage_count} uploads");
             }
 
             if ticker.time_since_last_dbg() > ticker.debug_interval() {
@@ -190,6 +210,8 @@ pub mod world {
         /// opposite direction.
         /// We then submit a limited list of requests to the ChunkLoader thread to handle.
         fn update_chunk_queues(&mut self, engine: &mut Engine) -> Result<()> {
+            let center_pos = self.chunk_load_center_pos.as_dvec3();
+
             if self.chunk_load_center_pos != self.player_chunk_pos {
                 debug!("Player moved chunks: {} -> {}", self.chunk_load_center_pos, self.player_chunk_pos);
                 self.chunk_load_center_pos = self.player_chunk_pos;
@@ -197,8 +219,6 @@ pub mod world {
                 self.chunk_loader.update_chunk_queues(self.chunk_load_center_pos, self.chunk_load_radius, Some(|chunk_pos| {
                     self.requested_chunks.remove(&chunk_pos);
                 }))?;
-
-                let center_pos = self.chunk_load_center_pos.as_dvec3();
 
                 // Furthest chunks from the player end up at the back of the list (unloaded first)
                 self.chunk_unload_queue.sort_by(|pos1, pos2| {
@@ -215,7 +235,8 @@ pub mod world {
 
                 let chunk_pos = self.chunk_unload_queue.pop().unwrap();
                 // debug!("Unloading chunk {chunk_pos}");
-                if !self.is_chunk_load_requested(&chunk_pos) {
+                if !self.is_chunk_load_requested(&chunk_pos) || chunk_pos.as_dvec3().distance_squared(center_pos) >= self.chunk_load_radius as f64 {
+
                     self.unload_chunk(engine, chunk_pos);
                 }
 
@@ -708,7 +729,7 @@ pub mod world {
         }
     }
 
-    impl Drop for VoxelChunkData {
+    impl Drop for VoxelChunkEntity {
         fn drop(&mut self) {
             // debug!("Dropping chunk: {:?}", self.chunk_pos);
         }

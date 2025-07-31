@@ -77,7 +77,7 @@ impl Window {
         Ok(window)
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, mut event_callback: impl FnMut(&Event, &InputHandler)) {
         // self.sdl_canvas.set_draw_color(Color::RGB(0, 255, 255));
         // self.sdl_canvas.clear();
         // self.sdl_canvas.present();
@@ -127,6 +127,7 @@ impl Window {
             }
 
             self.input_handler.process_event(&event);
+            event_callback(&event, &self.input_handler);
         }
         // self.sdl_canvas.present();
     }

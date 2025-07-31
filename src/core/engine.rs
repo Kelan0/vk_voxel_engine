@@ -2,7 +2,7 @@ use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::BeginFrameResult;
 use crate::core::scene::Scene;
-use crate::core::{debug_mesh, CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer};
+use crate::core::{debug_mesh, CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer, GUIRenderer, FrameProfiler};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -22,6 +22,8 @@ pub struct Engine {
     pub graphics: GraphicsManager,
     pub scene: Scene,
     pub scene_renderer: SceneRenderer,
+    pub ui_handler: GUIRenderer,
+    pub frame_profiler: FrameProfiler,
     user_app: Option<Box<dyn App>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
     next_resource_id: u64,
@@ -48,7 +50,12 @@ impl Engine {
 
         let scene_renderer = SceneRenderer::new(&graphics)
             .inspect_err(|_| error!("Failed to create SceneRenderer"))?;
-        
+
+        let ui_handler = GUIRenderer::new(&graphics)
+            .inspect_err(|_| error!("Failed to create UIHandler"))?;
+
+        let frame_profiler = FrameProfiler::new();
+
         // let user_app = Some(user_app);
         let user_app = Box::new(user_app);
         let user_app = Some(user_app as Box<dyn App>);
@@ -59,6 +66,8 @@ impl Engine {
             graphics,
             scene,
             scene_renderer,
+            ui_handler,
+            frame_profiler,
             user_app,
             event_window_resized: None,
             next_resource_id: 0,
@@ -136,6 +145,8 @@ impl Engine {
 
         unsafe { self.scene_renderer.register_events(&mut *self_ptr) }?;
 
+        unsafe { self.ui_handler.register_events(&mut *self_ptr) }?;
+
         Ok(())
     }
 
@@ -189,9 +200,29 @@ impl Engine {
 
         unsafe { self.scene.render(ticker, &mut *self_ptr) }?;
 
+        unsafe { self.ui_handler.render_gui(ticker, &mut *self_ptr, cmd_buf, self.graphics.resolution(), Self::run_gui)?; }
+
         cmd_buf.end_render_pass(SubpassEndInfo::default())?;
 
         Ok(())
+    }
+
+    fn run_gui(ticker: &mut Ticker, engine: &mut Engine, ctx: &egui::Context) {
+        engine.draw_gui(ticker, ctx);
+    }
+
+    fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {
+        egui::Window::new("Test Window").show(ctx, |ui| {
+
+            ui.label("Hello World");
+            if ui.button("Test").clicked() {
+                info!("Clicked a button!");
+            }
+
+            ctx.texture_ui(ui)
+        });
+
+        self.frame_profiler.draw_gui(ticker, ctx);
     }
     
     fn shutdown(&mut self) {
@@ -222,6 +253,8 @@ impl Tickable for Engine {
 
         debug_mesh::init(&self.graphics)?;
 
+        self.ui_handler.init(&self.graphics)?;
+
         unsafe { self.scene_renderer.init(&mut *self_ptr) }?;
 
         unsafe { self.user_app_mut().init(ticker, &mut *self_ptr) }?;
@@ -230,25 +263,26 @@ impl Tickable for Engine {
     }
 
     fn tick(&mut self, ticker: &mut Ticker) -> Result<()> {
-        self.window.update();
+        self.window.update(|event, input_handler| {
+            self.ui_handler.process_event(event, input_handler);
+        });
+
         if self.window.did_quit() {
             ticker.stop();
         }
 
-        if let Some(event) = self
-            .window
-            .event_bus()
-            .read_one_opt_ref(&mut self.event_window_resized)
-        {
+        if let Some(event) = self.window.event_bus().read_one_opt_ref(&mut self.event_window_resized) {
             self.graphics.set_resolution(event.width, event.height)?;
         }
 
         match self.graphics.begin_frame() {
             BeginFrameResult::Begin(mut cmd_buf) => {
+                self.frame_profiler.begin_frame();
                 self.pre_render(ticker, &mut cmd_buf)?;
                 self.render(ticker, &mut cmd_buf)?;
 
                 self.graphics.present_frame(cmd_buf)?;
+                self.frame_profiler.end_frame();
             }
             BeginFrameResult::Skip => {}
             BeginFrameResult::Err(err) => return Err(err),

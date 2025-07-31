@@ -9,7 +9,7 @@ glam = "0.30.4"
 log = "0.4.27"
 png = "0.17.16"
 pretty_env_logger = "0.5.0"
-raw-window-handle = "0.6.2"
+#winit = "0.30.12"
 sdl3 = { version = "0.14.33", features = [ "ash", "raw-window-handle" ] }
 thiserror = "2.0.12"
 tobj = "4.0.3"
@@ -32,6 +32,9 @@ simdeez = "=1.0.8"
 rand = "0.8.5"
 wide = "0.7.33"
 aligned = "0.4.2"
+egui = "0.32.0"
+egui-ash-renderer = "0.9.0"
+egui_plot = "0.33.0"
 #shipyard = "0.8.1"
 #tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "sync", "macros" ] }
 

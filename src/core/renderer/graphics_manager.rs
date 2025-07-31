@@ -23,7 +23,7 @@ use vulkano::command_buffer::CommandBufferExecFuture;
 use vulkano::command_buffer::CommandBufferUsage;
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwned, DeviceOwnedVulkanObject, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwned, DeviceOwnedVulkanObject, DeviceProperties, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
 use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
@@ -286,7 +286,7 @@ pub struct RecreateSwapchainEvent {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct CleanupFrameResourcesEvent {
+pub struct FrameCompleteEvent {
     pub frame_index: usize,
 }
 
@@ -305,7 +305,7 @@ impl GraphicsManager {
         let instance = Self::create_instance(&library, sdl_window)
             .inspect_err(|_| error!("Error creating Vulkan instance"))?;
 
-        let ash_instance = ash::Instance::from_parts_1_3(instance.handle(), instance.fns().v1_0.clone(), instance.fns().v1_1.clone(), instance.fns().v1_3.clone());
+        let vk_instance = ash::Instance::from_parts_1_3(instance.handle(), instance.fns().v1_0.clone(), instance.fns().v1_1.clone(), instance.fns().v1_3.clone());
 
         let debug_messenger = if ENABLE_VALIDATION_LAYERS {
             Some(Self::create_debug_utils_messenger(&instance)?)
@@ -356,14 +356,14 @@ impl GraphicsManager {
         let (device, queues) = Self::create_logical_device(&physical_device, device_extensions, device_features, &queue_details, &queue_layout)
             .inspect_err(|_| error!("Error creating logical device for renderer"))?;
 
-        let ash_device = ash::Device::from_parts_1_3(device.handle(), device.fns().v1_0.clone(), device.fns().v1_1.clone(), device.fns().v1_2.clone(), device.fns().v1_3.clone());
+        let vk_device = ash::Device::from_parts_1_3(device.handle(), device.fns().v1_0.clone(), device.fns().v1_1.clone(), device.fns().v1_2.clone(), device.fns().v1_3.clone());
 
-        let swapchain_loader = khr::swapchain::Device::new(&ash_instance, &ash_device);
+        let swapchain_loader = khr::swapchain::Device::new(&vk_instance, &vk_device);
 
         let memory_allocator = Self::create_memory_allocator(&device)
             .inspect_err(|_| error!("Error creating memory allocator"))?;
 
-        let command_pools = Self::create_command_pools(&ash_device, &queue_details)
+        let command_pools = Self::create_command_pools(&vk_device, &queue_details)
             .inspect_err(|_| error!("Error creating command pools for renderer"))?;
 
         let command_buffer_allocator = Self::create_command_buffer_allocator(&device)
@@ -392,11 +392,11 @@ impl GraphicsManager {
         let mut renderer = GraphicsManager {
             event_bus,
             instance,
-            ash_instance,
+            ash_instance: vk_instance,
             surface,
             physical_device,
             device,
-            ash_device,
+            ash_device: vk_device,
             swapchain_loader,
             queue_details,
             queues,
@@ -1227,8 +1227,8 @@ impl GraphicsManager {
         debug!("Device has {} references - Swapchain has {} references", Arc::strong_count(&self.device), swapchain_ref_count);
     }
 
-    fn cleanup_frame_resources(&mut self, frame_index: usize) {
-        self.event_bus.emit(CleanupFrameResourcesEvent{
+    fn on_frame_complete(&mut self, frame_index: usize) {
+        self.event_bus.emit(FrameCompleteEvent {
             frame_index,
         })
     }
@@ -1256,7 +1256,7 @@ impl GraphicsManager {
         frame_fence.wait(None).expect("Failed to wait on GPU Fence future");
         unsafe { frame_fence.reset() }.expect("Failed to reset GPU Fence future");
 
-        self.cleanup_frame_resources(current_frame_index);
+        self.on_frame_complete(current_frame_index);
 
         // ==== ACQUIRE THE NEXT IMAGE ====
 
@@ -1652,8 +1652,28 @@ impl GraphicsManager {
         &mut self.event_bus
     }
 
-    pub fn device(&self) -> Arc<Device> {
-        self.device.clone()
+    pub fn instance(&self) -> &Arc<Instance> {
+        &self.instance
+    }
+
+    pub fn ash_instance(&self) -> &ash::Instance {
+        &self.ash_instance
+    }
+
+    pub fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+
+    pub fn ash_device(&self) -> &ash::Device {
+        &self.ash_device
+    }
+
+    pub fn physical_device(&self) -> &Arc<PhysicalDevice> {
+        &self.physical_device
+    }
+
+    pub fn device_properties(&self) -> &DeviceProperties {
+        self.physical_device.properties()
     }
 
     pub fn memory_allocator(&self) -> Arc<StandardMemoryAllocator> {

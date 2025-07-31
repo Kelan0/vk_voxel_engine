@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, CleanupFrameResourcesEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, FrameCompleteEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
@@ -199,7 +199,7 @@ pub struct SceneRenderer {
     static_scene_changed: bool,
 
     event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
-    event_cleanup_frame_resources: Option<ReaderId<CleanupFrameResourcesEvent>>,
+    event_frame_complete: Option<ReaderId<FrameCompleteEvent>>,
 
     null_texture: Arc<ImageView>,
     default_sampler: Arc<Sampler>,
@@ -284,7 +284,7 @@ impl SceneRenderer {
     pub fn new(graphics: &GraphicsManager) -> Result<Self> {
 
         let null_texture = Self::create_null_texture(graphics)?;
-        let default_sampler = Self::create_default_sampler(graphics.device())?;
+        let default_sampler = Self::create_default_sampler(graphics.device().clone())?;
 
         let scene_renderer = SceneRenderer{
 
@@ -314,7 +314,7 @@ impl SceneRenderer {
             static_scene_changed: false,
 
             event_recreate_swapchain: None,
-            event_cleanup_frame_resources: None,
+            event_frame_complete: None,
 
             null_texture,
             default_sampler,
@@ -329,7 +329,7 @@ impl SceneRenderer {
 
     pub fn register_events(&mut self, engine: &mut Engine) -> Result<()> {
         self.event_recreate_swapchain = Some(engine.graphics.event_bus().register::<RecreateSwapchainEvent>());
-        self.event_cleanup_frame_resources = Some(engine.graphics.event_bus().register::<CleanupFrameResourcesEvent>());
+        self.event_frame_complete = Some(engine.graphics.event_bus().register::<FrameCompleteEvent>());
         Ok(())
     }
 
@@ -398,8 +398,8 @@ impl SceneRenderer {
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;
         }
-        if let Some(e) = engine.graphics.event_bus().read_one_opt(&mut self.event_cleanup_frame_resources) {
-            self.on_cleanup_frame_resources(engine, &e);
+        if let Some(e) = engine.graphics.event_bus().read_one_opt(&mut self.event_frame_complete) {
+            self.on_frame_complete(engine, &e);
         }
 
         let frame_index = engine.graphics.current_frame_index();
@@ -949,7 +949,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    fn on_cleanup_frame_resources(&mut self, engine: &mut Engine, event: &CleanupFrameResourcesEvent) {
+    fn on_frame_complete(&mut self, engine: &mut Engine, event: &FrameCompleteEvent) {
         let resource = &mut self.resources[event.frame_index];
         // if !resource.active_resources.is_empty() {
         //     let discard_count: usize = resource.active_resources.iter().map(|r| (Arc::strong_count(r) == 1) as usize).sum();
