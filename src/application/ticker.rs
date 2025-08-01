@@ -2,7 +2,7 @@ use anyhow::Result;
 use log::{debug, error, warn};
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
-use std::thread;
+use std::{slice, thread};
 use std::time::{Duration, Instant};
 
 const MIN_SLEEP_DURATION: f64 = 0.001; // 1ms - Sleep if there is at least this amount of time remaining for the current tick.
@@ -14,7 +14,7 @@ pub enum TickDurationMeasurementMode {
     NoMeasurement,
 }
 
-pub struct Ticker<'a> {
+pub struct Ticker {
     running: bool,
     start_time: Instant,
     last_time: Instant,
@@ -22,7 +22,6 @@ pub struct Ticker<'a> {
     last_dbg: Instant,
     tick_start_time: Instant,
     debug_interval: f64,
-    auto_stop: bool, // Automatically kill the ticker if the tick_list is empty 
     desired_tick_rate: f64,
     measured_tick_rate: f64,
     measured_idle_time: f64,
@@ -39,8 +38,6 @@ pub struct Ticker<'a> {
     last_idle_time: f64,
     partial_tick: f64,
     measured_tick_durations_limit: TickDurationMeasurementMode,
-    tick_list: Vec<&'a mut dyn Tickable>,
-    result: Option<Result<()>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -84,8 +81,8 @@ pub trait Tickable {
     fn is_stopped(&self) -> bool;
 }
 
-impl<'a> Ticker<'a> {
-    pub fn new(desired_tick_rate: f64, auto_stop: bool) -> Self {
+impl Ticker {
+    pub fn new(desired_tick_rate: f64) -> Self {
         let now = Instant::now();
         
         Ticker {
@@ -97,7 +94,6 @@ impl<'a> Ticker<'a> {
             tick_start_time: now,
             debug_interval: 1.0,
             desired_tick_rate,
-            auto_stop,
             measured_tick_rate: 0.0,
             measured_idle_time: 0.0,
             measured_tick_durations: VecDeque::new(),
@@ -113,18 +109,17 @@ impl<'a> Ticker<'a> {
             last_idle_time: 0.0,
             partial_tick: 0.0,
             measured_tick_durations_limit: TickDurationMeasurementMode::LimitCount(10000),
-            tick_list: Vec::new(),
-            result: None
         }
     }
 
-    // pub fn add_tickable(&mut self, tickable: Rc<RefCell<dyn Tickable>>) {
-    pub fn add_tickable(&mut self, tickable: &'a mut dyn Tickable) {
-        // let t = tickable.clone() as Rc<RefCell<dyn Tickable>>;
-        self.tick_list.push(tickable);
-    }
+    // // pub fn add_tickable(&mut self, tickable: Rc<RefCell<dyn Tickable>>) {
+    // pub fn add_tickable(&mut self, tickable: impl Into<&'a mut dyn Tickable>) {
+    //     // let t = tickable.clone() as Rc<RefCell<dyn Tickable>>;
+    //     self.tick_list.push(tickable);
+    // }
 
-    pub fn init(&mut self) -> Result<()> {
+    pub fn init<F, R>(&mut self, mut init_fn: Option<F>) -> Result<()>
+    where F: FnMut(&mut Ticker) -> Result<R> {
 
         self.start_time = Instant::now();
         self.last_time = self.start_time;
@@ -149,51 +144,55 @@ impl<'a> Ticker<'a> {
         self.partial_tick = 0.0;
         self.running = true;
 
-        
-        let mut tick_list = std::mem::take(&mut self.tick_list);
-        
-        for obj in &mut tick_list {
-            // let mut obj = obj.borrow_mut();
-            // if let Some(obj) = obj.upgrade() {
-            //     obj.borrow_mut().init(self)?;
-            // }
-            obj.init(self)?
+        if let Some(init_fn) = init_fn.as_mut() {
+            init_fn(self)?;
         }
-        
-        self.tick_list = tick_list;
+
+        // let mut tick_list = std::mem::take(&mut self.tick_list);
+        //
+        // for obj in &mut tick_list {
+        //     // let mut obj = obj.borrow_mut();
+        //     // if let Some(obj) = obj.upgrade() {
+        //     //     obj.borrow_mut().init(self)?;
+        //     // }
+        //     obj.init(self)?
+        // }
+        //
+        // self.tick_list = tick_list;
         Ok(())
     }
 
-    fn tick(&mut self) -> Result<()> {
-        let mut tick_list = std::mem::take(&mut self.tick_list);
-        
-        tick_list.retain(|tickable| {
-            !tickable.is_stopped()
-        });
+    // fn tick<F>(&mut self) -> Result<()> {
+    //     let mut tick_list = std::mem::take(&mut self.tick_list);
+    //
+    //     tick_list.retain(|tickable| {
+    //         !tickable.is_stopped()
+    //     });
+    //
+    //     for obj in &mut tick_list {
+    //         // let mut obj = obj.borrow_mut();
+    //         // if let Some(obj) = obj.upgrade() {
+    //         //     obj.borrow_mut().tick(self);
+    //         // } else {
+    //         //     // TODO: remove from list
+    //         // }
+    //         obj.tick(self)?;
+    //     }
+    //
+    //     self.tick_list = tick_list;
+    //     Ok(())
+    // }
 
-        for obj in &mut tick_list {
-            // let mut obj = obj.borrow_mut();
-            // if let Some(obj) = obj.upgrade() {
-            //     obj.borrow_mut().tick(self);
-            // } else {
-            //     // TODO: remove from list
-            // }
-            obj.tick(self)?;
-        }
-        
-        self.tick_list = tick_list;
-        Ok(())
-    }
-
-    pub fn update(&mut self) -> bool {
+    pub fn update<F>(&mut self, tick_fn: &mut Option<F>) -> Result<()>
+    where F: FnMut(&mut Ticker) -> Result<()> {
 
         if !self.is_running() {
-            return false;
+            return Ok(());
         }
 
-        if self.auto_stop && self.tick_list.is_empty() {
-            return false;
-        }
+        // if self.auto_stop && self.tick_list.is_empty() {
+        //     return false;
+        // }
 
         self.tick_start_time = Instant::now();
         let elapsed_time = self.tick_start_time.duration_since(self.last_time).as_secs_f64();
@@ -214,10 +213,13 @@ impl<'a> Ticker<'a> {
             self.last_tick = self.tick_start_time;
             self.partial_tick -= 1.0;
 
-            self.result = Some(self.tick());
-            if self.has_error() {
-                self.stop();
+            if let Some(tick_fn) = tick_fn.as_mut() {
+                tick_fn(self)?;
             }
+            // self.result = Some(self.tick());
+            // if self.has_error() {
+            //     self.stop();
+            // }
 
             self.tick_rate_count += 1;
             
@@ -298,19 +300,29 @@ impl<'a> Ticker<'a> {
             }
         }
 
-        true
+        Ok(())
     }
 
-    pub fn start_blocking(&mut self) -> bool {
-        if let Err(err) = self.init() {
-            error!("Failed to start application - error during initialization: {err}");
-            self.result = Some(Err(err));
-            return false;
+    pub fn start_blocking<T>(&mut self, tick_fn: T) -> Result<()>
+    where
+        // I: FnMut(&mut Ticker) -> Result<()>,
+        T: FnMut(&mut Ticker) -> Result<()>
+    {
+        // self.init(init_fn)?;
+
+        // if let Err(err) = self.init(init_fn) {
+        //     error!("Failed to start application - error during initialization: {err}");
+        //     self.result = Some(Err(err));
+        //     return false;
+        // }
+
+        let mut tick_fn = Some(tick_fn);
+
+        while self.is_running() {
+            self.update(&mut tick_fn)?;
         }
 
-        while self.update() {}
-
-        true
+        Ok(())
     }
 
     // pub fn start_thread(&self) -> bool {
@@ -371,18 +383,6 @@ impl<'a> Ticker<'a> {
         self.idle_time
     }
     
-    pub fn has_result(&self) -> bool {
-        self.result.is_some()
-    }
-    
-    pub fn has_error(&self) -> bool {
-        self.has_result() && self.get_result().unwrap().is_err()
-    }
-    
-    pub fn get_result(&self) -> Option<&Result<()>> {
-        self.result.as_ref()
-    }
-
     pub fn time_since_last_dbg(&self) -> f64 {
         self.tick_start_time.duration_since(self.last_dbg).as_secs_f64()
     }
@@ -390,15 +390,6 @@ impl<'a> Ticker<'a> {
     pub fn debug_interval(&self) -> f64 {
         self.debug_interval
     }
-
-    pub fn take_result(&mut self) -> Result<()> {
-        if !self.has_result() {
-            return Ok(());
-        }
-        
-        self.result.take().unwrap()
-    }
-
 
     pub fn calculate_profiling_statistics(&self) -> TickProfileStatistics {
 

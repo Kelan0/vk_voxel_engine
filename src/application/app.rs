@@ -13,7 +13,7 @@ pub trait App {
     
     fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()>;
     
-    fn shutdown(&mut self) {}
+    fn shutdown(&mut self, engine: &mut Engine) {}
 
     fn is_stopped(&self) -> bool;
 }

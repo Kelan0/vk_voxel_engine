@@ -61,6 +61,13 @@ impl Scene {
             // scene: self
         }
     }
+
+    pub fn destroy_entity(&mut self, entity: bevy_ecs::entity::Entity) {
+        // let mut commands = self.ecs.commands();
+        // commands.entity(entity).despawn();
+        // // self.ecs.entity(entity).despawn();
+        self.ecs.despawn(entity);
+    }
     
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         // let r = self.world.increment_change_tick();
@@ -97,5 +104,9 @@ impl Scene {
 
     pub fn world_mut(&mut self) -> &mut VoxelWorld {
         &mut self.world
+    }
+
+    pub fn shutdown(&mut self, engine: &mut Engine) {
+        self.world.shutdown(engine);
     }
 }

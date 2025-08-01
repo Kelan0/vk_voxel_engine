@@ -365,7 +365,7 @@ impl App for TestGame {
         Ok(())
     }
 
-    fn shutdown(&mut self) {
+    fn shutdown(&mut self, _engine: &mut Engine) {
         let mut file = String::new();
         for stat in &self.debug_stats {
             let s = format!("{stat:?}\n");

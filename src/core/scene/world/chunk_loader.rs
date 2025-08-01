@@ -120,8 +120,8 @@ impl ChunkLoader {
 
         // Sorted so that the closest chunks are at the end of the list (pop() first)
         ctx.chunk_complete_queue.sort_by(|chunk1, chunk2| {
-            let d1 = center_pos - chunk1.pos().as_dvec3();
-            let d2 = center_pos - chunk2.pos().as_dvec3();
+            let d1 = center_pos - chunk1.chunk_pos().as_dvec3();
+            let d2 = center_pos - chunk2.chunk_pos().as_dvec3();
             let dist1 = d1.length_squared();
             let dist2 = d2.length_squared();
             dist2.total_cmp(&dist1)

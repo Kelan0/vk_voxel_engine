@@ -1,6 +1,7 @@
 
 pub mod world {
     use std::any::Any;
+    use std::num::NonZero;
     use anyhow::Result;
     use ash::vk::DeviceSize;
     use foldhash::HashMap;
@@ -50,7 +51,7 @@ pub mod world {
 
     pub struct VoxelChunkEntity {
         entity_id: bevy_ecs::entity::Entity,
-        chunk_data: Box<VoxelChunkData>,
+        chunk_data: Option<Box<VoxelChunkData>>,
     }
 
     #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq)]
@@ -84,6 +85,22 @@ pub mod world {
             }
         }
 
+        pub fn shutdown(&mut self, engine: &mut Engine) {
+            // for (chunk_pos, chunk) in self.loaded_chunks.iter() {
+            //     self.unload_chunk(engine, *chunk_pos);
+            // }
+
+            let mut chunk_positions = Vec::with_capacity(self.loaded_chunks.len());
+
+            for (chunk_pos, _chunk) in self.loaded_chunks.iter() {
+                chunk_positions.push(*chunk_pos);
+            }
+
+            for chunk_pos in chunk_positions {
+                self.unload_chunk(engine, chunk_pos);
+            }
+        }
+
         pub fn update(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
             self.update_requested_chunks(engine)?;
             self.update_chunk_queues(engine)?;
@@ -96,7 +113,8 @@ pub mod world {
             let mut max_staging_size = 0;
 
             for (_chunk_pos, chunk) in &mut self.loaded_chunks {
-                let staging_size = chunk.chunk_data.get_staging_buffer_size();
+                let chunk_data = chunk.chunk_data.as_ref().unwrap();
+                let staging_size = chunk_data.get_staging_buffer_size();
                 if staging_size > 0 {
                     count += 1;
                     max_staging_size = DeviceSize::max(max_staging_size, staging_size);
@@ -120,13 +138,15 @@ pub mod world {
                 let mut iter = self.loaded_chunks.iter_mut();
                 while let Some((_chunk_pos, chunk)) = iter.next() {
 
-                    if chunk.chunk_data.get_staging_buffer_size() == 0 {
+                    let chunk_data = chunk.chunk_data.as_ref().unwrap();
+
+                    if chunk_data.get_staging_buffer_size() == 0 {
                         continue;
                     }
                     let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
 
                     if let Some(buf) = subbuffer.as_ref() {
-                        if buf.size() < chunk.chunk_data.get_staging_buffer_size() {
+                        if buf.size() < chunk_data.get_staging_buffer_size() {
                             subbuffer = None;
                         }
                     }
@@ -139,9 +159,9 @@ pub mod world {
                         staged_bytes += staging_buffer.size();
                     }
 
-                    chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
+                    staging_offset += chunk_data.get_staging_buffer_size();
 
-                    staging_offset += chunk.chunk_data.get_staging_buffer_size();
+                    chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
 
                     let fence = engine.graphics.submit_transfer_commands(cmd_buf)?;
                     fences.push(fence);
@@ -313,10 +333,11 @@ pub mod world {
         }
 
         fn unload_chunk(&mut self, engine: &mut Engine, chunk_pos: IVec3) {
-            if let Some(chunk) = self.loaded_chunks.get_mut(&chunk_pos) {
+            if let Some(mut chunk) = self.loaded_chunks.remove(&chunk_pos) {
+                // engine.scene.destroy_entity(chunk.entity_id);
                 chunk.unload(engine);
+                chunk.chunk_data = None;
             }
-            self.loaded_chunks.remove(&chunk_pos);
         }
 
         pub fn request_load_chunk(&mut self, chunk_pos: IVec3) {
@@ -409,7 +430,7 @@ pub mod world {
 
     impl VoxelChunkEntity {
         fn new(chunk_data: Box<VoxelChunkData>, engine: &mut Engine) -> Self {
-            let chunk_pos = *chunk_data.pos();
+            let chunk_pos = *chunk_data.chunk_pos();
             let pos = get_chunk_world_pos(chunk_pos);
 
             let mut entity = engine.scene.create_entity(format!("chunk({},{},{})", chunk_pos.x, chunk_pos.y, chunk_pos.z).as_str());
@@ -418,14 +439,14 @@ pub mod world {
 
             VoxelChunkEntity {
                 entity_id: entity.id().id(),
-                chunk_data
+                chunk_data: Some(chunk_data)
             }
         }
 
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
-
-            let staging_size = self.chunk_data.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
-            let mesh_data = self.chunk_data.updated_mesh_data.take();
+            let chunk_data = self.chunk_data.as_mut().unwrap();;
+            let staging_size = chunk_data.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
+            let mesh_data = chunk_data.updated_mesh_data.take();
 
             if staging_size == 0 {
                 return Ok(())
@@ -443,14 +464,14 @@ pub mod world {
                     render_component.mesh = Some(mesh.clone());
                 })?;
 
-                self.chunk_data.mesh = Some(mesh);
+                chunk_data.mesh = Some(mesh);
             }
 
             Ok(())
         }
 
         fn unload(&mut self, engine: &mut Engine) {
-            engine.scene.ecs.despawn(self.entity_id);
+            engine.scene.destroy_entity(self.entity_id);
         }
 
         // fn update_mesh_data(&mut self) -> Result<()>{
@@ -458,18 +479,31 @@ pub mod world {
         // }
 
         pub fn get_block(&self, pos: UVec3) -> u32 {
-            self.chunk_data.get_block(pos)
+            self.chunk_data().get_block(pos)
         }
+
         pub fn set_block(&mut self, pos: UVec3, block: u32) {
-            self.chunk_data.set_block(pos, block)
+            self.chunk_data_mut().set_block(pos, block)
         }
 
         pub fn draw_debug_bounds(&self, ctx: &mut DebugRenderContext) -> Result<()> {
-            self.chunk_data.draw_debug_bounds(ctx)
+            self.chunk_data().draw_debug_bounds(ctx)
         }
 
         pub fn draw_debug_grid(&self, ctx: &mut DebugRenderContext) -> Result<()> {
-            self.chunk_data.draw_debug_grid(ctx)
+            self.chunk_data().draw_debug_grid(ctx)
+        }
+
+        pub fn chunk_data(&self) -> &Box<VoxelChunkData> {
+            self.chunk_data.as_ref().unwrap()
+        }
+
+        pub fn chunk_data_mut(&mut self) -> &mut Box<VoxelChunkData> {
+            self.chunk_data.as_mut().unwrap()
+        }
+
+        pub fn chunk_pos(&self) -> &IVec3 {
+            self.chunk_data().chunk_pos()
         }
     }
 
@@ -499,7 +533,7 @@ pub mod world {
             }
         }
 
-        pub fn pos(&self) -> &IVec3 {
+        pub fn chunk_pos(&self) -> &IVec3 {
             &self.chunk_pos
         }
 
@@ -731,6 +765,7 @@ pub mod world {
 
     impl Drop for VoxelChunkEntity {
         fn drop(&mut self) {
+            debug_assert!(self.chunk_data.is_none(), "VoxelChunkEntity was not deallocated before being dropped")
             // debug!("Dropping chunk: {:?}", self.chunk_pos);
         }
     }

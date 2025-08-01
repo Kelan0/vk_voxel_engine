@@ -142,7 +142,7 @@ impl WorldGenerator {
     // }
 
     pub fn load_chunk(&self, chunk: &mut Box<VoxelChunkData>) -> Result<()> {
-        let chunk_pos = chunk.pos().clone();
+        let chunk_pos = chunk.chunk_pos().clone();
 
         // let t0 = Instant::now();
 

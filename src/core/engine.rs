@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::BeginFrameResult;
@@ -29,8 +30,11 @@ pub struct Engine {
     next_resource_id: u64,
 }
 
+unsafe impl Send for Engine {}
+unsafe impl Sync for Engine {}
+
 impl Engine {
-    fn new<T>(user_app: T) -> Result<Self>
+    fn new<T>(user_app: T) -> Result<Box<Self>>
     where
         T: App + 'static,
     {
@@ -73,7 +77,7 @@ impl Engine {
             next_resource_id: 0,
         };
 
-        Ok(app)
+        Ok(Box::new(app))
     }
 
     fn start_internal<T>(user_app: T) -> Result<()>
@@ -83,21 +87,30 @@ impl Engine {
         set_default_env_var("RUST_LOG", "info");
         pretty_env_logger::init();
 
-        let update_loop = Ticker::new(60.0, true);
-        let update_loop = Box::leak(Box::new(update_loop)); // update_loop lives forever
+        let update_loop = Ticker::new(60.0);
+        let mut update_loop = Box::leak(Box::new(update_loop)); // update_loop lives forever
 
-        let app = Engine::new(user_app)?;
-        let app = Box::leak(Box::new(app)); // app lives forever
+        let mut app = Engine::new(user_app)?;
+        // let mut app = Box::leak(Box::new(app)); // app lives forever
 
         // let a = app.user_app.as_ref().unwrap();
         // a.register_events(app)?;
 
-        update_loop.add_tickable(app);
-        update_loop.start_blocking();
+        // update_loop.add_tickable(app);
+
+        // let a = |ticker| -> Result<()> {
+        //     app.init(ticker)
+        // };
+
+        update_loop.init(Some(|ticker: &mut Ticker| -> Result<()> {
+            app.init(ticker)
+        }))?;
 
 
-        let result = update_loop.take_result();
-            
+        let result = update_loop.start_blocking(|ticker: &mut Ticker| -> Result<()> {
+            app.tick(ticker)
+        });
+
         app.shutdown();
 
         result
@@ -226,7 +239,11 @@ impl Engine {
     }
     
     fn shutdown(&mut self) {
-        self.user_app_mut().shutdown();
+        let self_ptr: *mut Self = self;
+
+        unsafe { self.scene.shutdown(&mut *self_ptr) };
+        
+        unsafe { self.user_app_mut().shutdown(&mut *self_ptr) };
     }
 
     /// Get a unique identifier for any resource that needs to be tracked
