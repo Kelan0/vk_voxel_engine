@@ -5,6 +5,7 @@ use bevy_ecs::bundle::Bundle;
 use bevy_ecs::component::Component;
 use bevy_ecs::world::{EntityWorldMut, World};
 use crate::core::scene::world::VoxelWorld;
+use crate::{function_name, profile_scope_fn};
 
 pub struct Scene {
     pub ecs: World,
@@ -70,6 +71,8 @@ impl Scene {
     }
     
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+        profile_scope_fn!(&engine.frame_profiler);
+        
         // let r = self.world.increment_change_tick();
         self.ecs.clear_trackers();
 
@@ -91,11 +94,16 @@ impl Scene {
     }
 
     pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+        profile_scope_fn!(&engine.frame_profiler);
 
         self.world.update(ticker, engine)?;
         self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
 
         Ok(())
+    }
+
+    pub fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {
+        self.world.draw_gui(ticker, ctx);
     }
 
     pub fn world(&self) -> &VoxelWorld {

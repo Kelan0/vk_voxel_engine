@@ -11,6 +11,7 @@ use vulkano::command_buffer::{
     RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
 };
 use vulkano::format::ClearValue;
+use crate::{function_name, profile_scope_fn};
 
 // Eww global state in Rust >:(
 static mut NEXT_RESOURCE_ID: u64 = 0;
@@ -168,6 +169,9 @@ impl Engine {
         ticker: &mut Ticker,
         cmd_buf: &mut CommandBuffer,
     ) -> Result<()> {
+
+        profile_scope_fn!(&self.frame_profiler);
+
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
             self.graphics.debug_print_ref_counts();
         }
@@ -186,6 +190,9 @@ impl Engine {
     }
 
     fn render(&mut self, ticker: &mut Ticker, cmd_buf: &mut CommandBuffer) -> Result<()> {
+
+        profile_scope_fn!(&self.frame_profiler);
+
         let clear_values = vec![
             Some(ClearValue::Float([0.05, 0.05, 0.2, 1.0])),
             Some(ClearValue::Depth(1.0))
@@ -235,6 +242,7 @@ impl Engine {
             ctx.texture_ui(ui)
         });
 
+        self.scene.draw_gui(ticker, ctx);
         self.frame_profiler.draw_gui(ticker, ctx);
     }
     
@@ -242,7 +250,7 @@ impl Engine {
         let self_ptr: *mut Self = self;
 
         unsafe { self.scene.shutdown(&mut *self_ptr) };
-        
+
         unsafe { self.user_app_mut().shutdown(&mut *self_ptr) };
     }
 
@@ -280,6 +288,9 @@ impl Tickable for Engine {
     }
 
     fn tick(&mut self, ticker: &mut Ticker) -> Result<()> {
+
+        // profile_scope_fn!(&self.frame_profiler);
+
         self.window.update(|event, input_handler| {
             self.ui_handler.process_event(event, input_handler);
         });

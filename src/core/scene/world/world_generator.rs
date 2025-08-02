@@ -163,12 +163,16 @@ impl WorldGenerator {
 
         // let t1 = Instant::now();
 
+        let min_y = -32;
+        let max_y = 32;
         for i in 0..CHUNK_BLOCK_COUNT {
             let chunk_block_pos = calc_coord_for_index(i as u32, CHUNK_BOUNDS);
+            let world_block_pos = chunk_pos * CHUNK_BOUNDS.as_ivec3() + chunk_block_pos.as_ivec3();
             let density = samples[i];
             // let density = (density - min) / (max - min);
 
-            if density > 0.3 {
+            let density_threshold = f32::clamp((world_block_pos.y - min_y) as f32 / (max_y - min_y) as f32, 0.0, 1.0);
+            if density > density_threshold {
                 chunk.set_block(chunk_block_pos, 1);
             }
         }

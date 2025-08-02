@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use crate::application::window::SdlWindow;
 use crate::core::event::EventBus;
 use crate::core::renderer::command_buffer::CommandBuffer;
@@ -15,7 +16,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::Read;
 use std::slice;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
@@ -29,8 +30,8 @@ use vulkano::image::view::{ImageView, ImageViewCreateInfo, ImageViewType};
 use vulkano::image::{Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageType, ImageUsage, SampleCount};
 use vulkano::instance::debug::{DebugUtilsMessageSeverity, DebugUtilsMessageType, DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo};
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
-use vulkano::memory::allocator::{AllocationCreateInfo, FreeListAllocator, GenericMemoryAllocator, MemoryAllocator, MemoryTypeFilter};
-use vulkano::memory::MemoryHeapFlags;
+use vulkano::memory::allocator::{AllocationCreateInfo, AllocationHandle, AllocationType, DeviceLayout, FreeListAllocator, GenericMemoryAllocator, GenericMemoryAllocatorCreateInfo, MemoryAlloc, MemoryAllocator, MemoryAllocatorError, MemoryTypeFilter};
+use vulkano::memory::{DedicatedAllocation, ExternalMemoryHandleTypes, MemoryHeapFlags, MemoryRequirements};
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::query::{QueryControlFlags, QueryPipelineStatisticFlags, QueryPool, QueryPoolCreateInfo, QueryResultFlags, QueryType};
 use vulkano::render_pass::{AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency, SubpassDescription};
@@ -48,7 +49,130 @@ const ENABLE_VALIDATION_LAYERS: bool = true;
 // pub type PrimaryCommandBuffer = CommandBuffer<PrimaryAutoCommandBuffer>;
 // pub type SecondaryCommandBuffer = CommandBuffer<SecondaryAutoCommandBuffer>;
 
-pub type StandardMemoryAllocator = GenericMemoryAllocator<FreeListAllocator>;
+// pub type StandardMemoryAllocator = GenericMemoryAllocator<FreeListAllocator>;
+pub type StandardMemoryAllocator = DebugMemoryAllocator;
+
+pub struct DebugMemoryAllocator {
+    allocator: GenericMemoryAllocator<FreeListAllocator>,
+    info: Mutex<DebugMemoryAllocatorInfo>,
+}
+
+#[derive(Default)]
+struct DebugMemoryAllocatorInfo {
+    allocated_bytes: DeviceSize,
+    allocations: HashMap<AllocationHandle, DeviceSize>
+}
+
+impl DebugMemoryAllocator  {
+    pub fn new(device: Arc<Device>, create_info: GenericMemoryAllocatorCreateInfo) -> Self {
+        DebugMemoryAllocator {
+            allocator: GenericMemoryAllocator::<FreeListAllocator>::new(device, create_info),
+            info: Mutex::new(DebugMemoryAllocatorInfo::default()),
+        }
+    }
+
+    pub fn new_default(device: Arc<Device>) -> Self {
+        DebugMemoryAllocator {
+            allocator: GenericMemoryAllocator::<FreeListAllocator>::new_default(device),
+            info: Mutex::new(DebugMemoryAllocatorInfo::default()),
+        }
+    }
+
+    fn track_allocation(&self, result: std::result::Result<MemoryAlloc, MemoryAllocatorError>) -> std::result::Result<MemoryAlloc, MemoryAllocatorError> {
+        if let Ok(allocation) = &result {
+            let mut info = self.info.lock().unwrap();
+
+            if let Some(suballocation) = &allocation.suballocation {
+                if !info.allocations.contains_key(&suballocation.handle) {
+                    info.allocated_bytes += suballocation.size;
+                    info.allocations.insert(suballocation.handle, suballocation.size);
+                }
+
+            } else {
+                if !info.allocations.contains_key(&allocation.allocation_handle) {
+                    info.allocated_bytes += allocation.device_memory.allocation_size();
+                    info.allocations.insert(allocation.allocation_handle, allocation.device_memory.allocation_size());
+                }
+            }
+        }
+
+        result
+    }
+
+    fn track_deallocation(&self, allocation: &MemoryAlloc) {
+        let mut info = self.info.lock().unwrap();
+        if let Some(suballocation) = &allocation.suballocation {
+            if info.allocations.remove(&suballocation.handle).is_some() {
+                info.allocated_bytes -= suballocation.size;
+            } else {
+                warn!("Deallocating {} bytes - Suballocation {:?} was not tracked", suballocation.size, suballocation.handle);
+            }
+
+        } else {
+            if info.allocations.remove(&allocation.allocation_handle).is_some() {
+                info.allocated_bytes -= allocation.device_memory.allocation_size();
+            } else {
+                warn!("Deallocating {} bytes - Allocation {:?} was not tracked", allocation.device_memory.allocation_size(), allocation.allocation_handle);
+            }
+        }
+    }
+
+    pub fn log_debug(&self) {
+        let info = self.info.lock().unwrap();
+        let bytes = info.allocated_bytes;
+        let mut unit = "Bytes";
+        let mut size = info.allocated_bytes as f64;
+
+        if size > 1024.0 {
+            size /= 1024.0;
+            unit = "KiB";
+
+            if size >= 1024.0 {
+                size /= 1024.0;
+                unit = "MiB"
+            }
+        }
+
+        debug!("GPU Memory: Allocated {bytes} ({size:.2} {unit}) in {} chunks", info.allocations.len())
+    }
+}
+
+unsafe impl DeviceOwned for DebugMemoryAllocator {
+    fn device(&self) -> &Arc<Device> {
+        self.allocator.device()
+    }
+}
+
+unsafe impl MemoryAllocator for DebugMemoryAllocator {
+    fn find_memory_type_index(&self, memory_type_bits: u32, filter: MemoryTypeFilter) -> Option<u32> {
+        self.allocator.find_memory_type_index(memory_type_bits, filter)
+    }
+
+
+    fn allocate_from_type(&self, memory_type_index: u32, layout: DeviceLayout, allocation_type: AllocationType, never_allocate: bool) -> std::result::Result<MemoryAlloc, MemoryAllocatorError> {
+        // debug!("DebugMemoryAllocator::allocate_from_type(memory_type_index:{memory_type_index}, layout:{layout:?}, allocation_type:{allocation_type:?}, never_allocate:{never_allocate:?})");
+        let r = self.allocator.allocate_from_type(memory_type_index, layout, allocation_type, never_allocate);
+        self.track_allocation(r)
+    }
+
+    fn allocate(&self, requirements: MemoryRequirements, allocation_type: AllocationType, create_info: AllocationCreateInfo, dedicated_allocation: Option<DedicatedAllocation<'_>>) -> std::result::Result<MemoryAlloc, MemoryAllocatorError> {
+        // debug!("DebugMemoryAllocator::allocate(requirements:{requirements:?}, allocation_type:{allocation_type:?}, create_info:{create_info:?}, dedicated_allocation:{dedicated_allocation:?})");
+        let r = self.allocator.allocate(requirements, allocation_type, create_info, dedicated_allocation);
+        self.track_allocation(r)
+    }
+
+    fn allocate_dedicated(&self, memory_type_index: u32, allocation_size: DeviceSize, dedicated_allocation: Option<DedicatedAllocation<'_>>, export_handle_types: ExternalMemoryHandleTypes) -> std::result::Result<MemoryAlloc, MemoryAllocatorError> {
+        // debug!("DebugMemoryAllocator::allocate_dedicated(memory_type_index:{memory_type_index:?}, allocation_size:{allocation_size:?}, dedicated_allocation:{dedicated_allocation:?}, export_handle_types:{export_handle_types:?})");
+        let r = self.allocator.allocate_dedicated(memory_type_index, allocation_size, dedicated_allocation, export_handle_types);
+        self.track_allocation(r)
+    }
+
+    unsafe fn deallocate(&self, allocation: MemoryAlloc) {
+        // debug!("DebugMemoryAllocator::deallocate(allocation:{allocation:?})");
+        self.track_deallocation(&allocation);
+        self.allocator.deallocate(allocation)
+    }
+}
 
 type QueueMap = HashMap<&'static str, Arc<Queue>>;
 
@@ -1223,6 +1347,8 @@ impl GraphicsManager {
 
     pub fn debug_print_ref_counts(&self) {
 
+        self.memory_allocator.log_debug();
+        
         let swapchain_ref_count = self.swapchain_info.swapchain.as_ref().map_or(0, |val| { Arc::strong_count(val) });
         debug!("Device has {} references - Swapchain has {} references", Arc::strong_count(&self.device), swapchain_ref_count);
     }

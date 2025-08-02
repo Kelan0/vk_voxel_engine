@@ -1,6 +1,7 @@
 
 pub mod world {
-    use std::any::Any;
+    use crate::core::ScopedProfile;
+use std::any::Any;
     use std::num::NonZero;
     use anyhow::Result;
     use ash::vk::DeviceSize;
@@ -15,6 +16,7 @@ pub mod world {
     use crate::application::Ticker;
     use crate::core::{debug_mesh, util, AxisAlignedBoundingBox, BaseVertex, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, RenderType, Transform, WorldGenerator};
     use crate::core::scene::world::chunk_loader::ChunkLoader;
+    use crate::{function_name, profile_scope, profile_scope_fn};
 
     pub const CHUNK_SIZE_EXP: u32 = 5;
     pub const CHUNK_SIZE: u32 = 1 << CHUNK_SIZE_EXP;
@@ -34,7 +36,9 @@ pub mod world {
         chunk_load_radius: u32,
         max_async_chunks_per_frame: u32,
         world_generator: Arc<WorldGenerator>,
-        chunk_loader: ChunkLoader
+        chunk_loader: ChunkLoader,
+
+        debug_info: DebugInfo,
     }
 
     // #[derive(Debug)]
@@ -62,6 +66,29 @@ pub mod world {
         UnloadPending,
     }
 
+    #[derive(Default, Clone, Copy, Debug)]
+    struct DebugInfo {
+        max_loaded_chunks_count: usize,
+        max_requested_chunks_count: usize,
+        max_generate_chunks_count: usize,
+        max_mesh_chunks_count: usize,
+        max_unload_chunks_count: usize,
+        max_canceled_chunks_count: usize,
+    }
+
+    impl DebugInfo {
+        pub fn reset(&mut self) {
+            self.max_loaded_chunks_count = 0;
+            self.max_requested_chunks_count = 0;
+            self.max_generate_chunks_count = 0;
+            self.max_mesh_chunks_count = 0;
+            self.max_unload_chunks_count = 0;
+            self.max_canceled_chunks_count = 0;
+        }
+    }
+
+
+
     impl VoxelWorld {
         pub fn new(world_generator: WorldGenerator) -> Self {
 
@@ -78,10 +105,12 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 6,
+                chunk_load_radius: 12,
                 max_async_chunks_per_frame: 32,
                 world_generator,
                 chunk_loader,
+
+                debug_info: Default::default()
             }
         }
 
@@ -101,7 +130,44 @@ pub mod world {
             }
         }
 
+        pub fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {
+
+            if ticker.time_since_last_dbg() >= ticker.debug_interval() {
+                self.debug_info.reset();
+
+                self.debug_info.max_loaded_chunks_count = usize::max(self.debug_info.max_loaded_chunks_count, self.loaded_chunks.len());
+                self.debug_info.max_requested_chunks_count = usize::max(self.debug_info.max_requested_chunks_count, self.requested_chunks.len());
+                self.debug_info.max_generate_chunks_count = usize::max(self.debug_info.max_generate_chunks_count, self.chunk_loader.chunk_generate_request_count());
+                self.debug_info.max_mesh_chunks_count = usize::max(self.debug_info.max_mesh_chunks_count, self.chunk_loader.chunk_mesh_request_count());
+                self.debug_info.max_unload_chunks_count = usize::max(self.debug_info.max_unload_chunks_count, self.chunk_unload_queue.len());
+                self.debug_info.max_canceled_chunks_count = usize::max(self.debug_info.max_canceled_chunks_count, self.chunk_loader.canceled_chunks_count());
+            }
+
+            egui::Window::new("World Info")
+                .anchor(egui::Align2::RIGHT_TOP, [30.0, 30.0])
+                .show(ctx, |ui| {
+                    let chunk_pos_str = format!("Player chunk pos: {}", self.player_chunk_pos);
+                    let loaded_chunks_count_str = format!("Loaded chunks: {} ({})", self.loaded_chunks.len(), self.debug_info.max_loaded_chunks_count);
+                    let requested_chunks_count_str = format!("Requested chunks: {} ({})", self.requested_chunks.len(), self.debug_info.max_requested_chunks_count);
+                    let generate_chunks_count_str = format!("Generation queued: {} ({})", self.chunk_loader.chunk_generate_request_count(), self.debug_info.max_generate_chunks_count);
+                    let mesh_chunks_count_str = format!("Meshing queued: {} ({})", self.chunk_loader.chunk_mesh_request_count(), self.debug_info.max_mesh_chunks_count);
+                    let unload_chunks_count_str = format!("Unload queued: {} ({})", self.chunk_unload_queue.len(), self.debug_info.max_unload_chunks_count);
+                    let canceled_chunks_count_str = format!("Canceled chunks: {} ({})", self.chunk_loader.canceled_chunks_count(), self.debug_info.max_canceled_chunks_count);
+                    ui.label(chunk_pos_str);
+                    ui.label(loaded_chunks_count_str);
+                    ui.label(requested_chunks_count_str);
+                    ui.label(generate_chunks_count_str);
+                    ui.label(mesh_chunks_count_str);
+                    ui.label(unload_chunks_count_str);
+                    ui.label(canceled_chunks_count_str);
+                });
+
+        }
+
         pub fn update(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
+
+            profile_scope_fn!(&engine.frame_profiler);
+
             self.update_requested_chunks(engine)?;
             self.update_chunk_queues(engine)?;
 
@@ -175,10 +241,10 @@ pub mod world {
                 // debug!("Updated {count} chunks in {dur} msec - staging size: {staged_bytes} bytes in {stage_count} uploads");
             }
 
-            if ticker.time_since_last_dbg() > ticker.debug_interval() {
-                debug!("Player chunk pos: {}", self.player_chunk_pos);
-                debug!("World has {} loaded chunks, {} requested chunks, {} loads queued, {} unloads queued", self.loaded_chunks.len(), self.requested_chunks.len(), self.chunk_loader.chunk_load_request_count(), self.chunk_unload_queue.len())
-            }
+            // if ticker.time_since_last_dbg() > ticker.debug_interval() {
+            //     debug!("Player chunk pos: {}", self.player_chunk_pos);
+            //     debug!("World has {} loaded chunks, {} requested chunks, {} generation queued, {} meshing queued, {} unloads queued", self.loaded_chunks.len(), self.requested_chunks.len(), self.chunk_loader.chunk_generate_request_count(), self.chunk_loader.chunk_mesh_request_count(), self.chunk_unload_queue.len())
+            // }
             Ok(())
         }
 
@@ -201,25 +267,32 @@ pub mod world {
             }
 
             let t0 = Instant::now();
-            self.chunk_loader.request_load_chunks(chunks_to_load)?;
+            self.chunk_loader.request_generate_chunks(chunks_to_load)?;
             let dur = t0.elapsed().as_secs_f64() * 1000.0;
             if dur > 2.0 {
                 warn!("request_load_chunks blocked for {dur} msec");
             }
 
+            let mut num_completed = 0;
+            let mut num_canceled = 0;
+
             let t0 = Instant::now();
 
-            let mut loaded_chunks = vec![];
-            self.chunk_loader.drain_completed_chunks(10, &mut loaded_chunks)?;
-            for chunk in loaded_chunks {
+            self.chunk_loader.drain_completed_chunks(10, |chunk| {
                 let chunk_pos = chunk.chunk_pos;
-                self.requested_chunks.remove(&chunk_pos);
                 self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::new(chunk, engine));
-            }
+                self.requested_chunks.remove(&chunk_pos);
+                num_completed += 1;
+            })?;
+
+            self.chunk_loader.drain_canceled_chunks(usize::MAX, false, |chunk_pos| {
+                self.requested_chunks.remove(&chunk_pos);
+                num_canceled += 1;
+            })?;
 
             let dur = t0.elapsed().as_secs_f64() * 1000.0;
             if dur > 2.0 {
-                warn!("drain_completed_chunks blocked for {dur} msec");
+                warn!("ChunkLoader drained {num_completed} completed chunks, {num_canceled} canceled chunks - Took {dur} msec");
             }
 
             Ok(())
@@ -233,7 +306,6 @@ pub mod world {
             let center_pos = self.chunk_load_center_pos.as_dvec3();
 
             if self.chunk_load_center_pos != self.player_chunk_pos {
-                debug!("Player moved chunks: {} -> {}", self.chunk_load_center_pos, self.player_chunk_pos);
                 self.chunk_load_center_pos = self.player_chunk_pos;
 
                 self.chunk_loader.update_chunk_queues(self.chunk_load_center_pos, self.chunk_load_radius, Some(|chunk_pos| {
@@ -270,7 +342,7 @@ pub mod world {
             let chunk_pos = get_chunk_pos_for_world_pos(player_pos);
 
             if self.player_chunk_pos != chunk_pos {
-                debug!("Player moved chunk {} -> {}", self.player_chunk_pos, chunk_pos);
+                // debug!("Player moved chunk {} -> {}", self.player_chunk_pos, chunk_pos);
                 self.player_chunk_pos = chunk_pos;
 
                 self.load_chunks_in_radius(chunk_pos, self.chunk_load_radius as i32);
@@ -311,7 +383,7 @@ pub mod world {
 
             let mut unload_chunk_positions = vec![];
 
-            for (chunk_pos, index) in &self.loaded_chunks {
+            for (chunk_pos, _index) in &self.loaded_chunks {
 
                 if self.is_chunk_unload_requested(chunk_pos) {
                     continue;
@@ -325,7 +397,7 @@ pub mod world {
                 }
             }
 
-            debug!("Unloading {} chunks", unload_chunk_positions.len());
+            // debug!("Unloading {} chunks", unload_chunk_positions.len());
 
             for chunk_pos in unload_chunk_positions {
                 self.request_unload_chunk(chunk_pos);
@@ -444,27 +516,19 @@ pub mod world {
         }
 
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
-            let chunk_data = self.chunk_data.as_mut().unwrap();;
-            let staging_size = chunk_data.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
-            let mesh_data = chunk_data.updated_mesh_data.take();
+            let chunk_data = self.chunk_data.as_mut().unwrap();
 
-            if staging_size == 0 {
-                return Ok(())
-            }
+            let did_update_mesh = chunk_data.create_gpu_mesh(cmd_buf, staging_buffer, engine)?;
 
-            if let Some(mesh_data) = mesh_data {
 
-                let allocator = engine.graphics.memory_allocator();
+            if did_update_mesh {
+                if let Some(mut render_component) = engine.scene.ecs.get_mut::<RenderComponent<BaseVertex>>(self.entity_id) {
+                    render_component.mesh = chunk_data.mesh.clone();
+                }
 
-                let staging_buffer = util::chop_buffer_at(staging_buffer, staging_size).unwrap();
-
-                let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
-
-                engine.scene.ecs.modify_component(self.entity_id, |render_component: &mut RenderComponent<BaseVertex>| {
-                    render_component.mesh = Some(mesh.clone());
-                })?;
-
-                chunk_data.mesh = Some(mesh);
+                // engine.scene.ecs.modify_component(self.entity_id, |render_component: &mut RenderComponent<BaseVertex>| {
+                //     render_component.mesh = chunk_data.mesh.clone();
+                // })?;
             }
 
             Ok(())
@@ -671,7 +735,7 @@ pub mod world {
                         for z in 0..CHUNK_BOUNDS.z / d {
                             let cz = (z * d) as f32 + dh;
 
-                            let index = calc_index_for_coord(UVec3::new(x, y, z), CHUNK_BOUNDS) as usize;
+                            let index = calc_index_for_coord(UVec3::new(x * d, y * d, z * d), CHUNK_BOUNDS) as usize;
 
                             let flags = self.block_flags[index];
                             let block = self.blocks[index];
@@ -690,6 +754,28 @@ pub mod world {
             }
 
             Ok(())
+        }
+
+        pub fn create_gpu_mesh(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<bool> {
+            let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
+            let mesh_data = self.updated_mesh_data.take();
+
+            if staging_size == 0 {
+                return Ok(false)
+            }
+
+            if let Some(mesh_data) = mesh_data {
+                let allocator = engine.graphics.memory_allocator();
+
+                let staging_buffer = util::chop_buffer_at(staging_buffer, staging_size).unwrap();
+
+                let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
+                self.mesh = Some(mesh);
+
+                return Ok(true)
+            }
+
+            Ok(false)
         }
 
         fn get_staging_buffer_size(&self) -> DeviceSize {

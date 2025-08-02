@@ -35,6 +35,7 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
+use crate::{function_name, profile_scope_fn};
 
 #[derive(BufferContents, Vertex, Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -391,7 +392,15 @@ impl SceneRenderer {
         Ok(())
     }
 
-    pub fn pre_render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut CommandBuffer) -> Result<()> {
+    pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut CommandBuffer) -> Result<()> {
+
+        profile_scope_fn!(&engine.frame_profiler);
+
+        if ticker.time_since_last_dbg() >= ticker.debug_interval() {
+            let mut query = engine.scene.ecs.query::<(&mut RenderComponent<BaseVertex>, &Transform)>();
+            let len = query.iter(&engine.scene.ecs).len();
+            debug!("{len} RenderComponent entities");
+        }
 
         self.static_scene_changed = false;
 
@@ -442,6 +451,8 @@ impl SceneRenderer {
 
     pub fn render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
+        profile_scope_fn!(&engine.frame_profiler);
+
         let viewport = engine.graphics.get_viewport();
 
         let resource = Self::curr_resource(&mut self.resources, engine);
@@ -479,6 +490,8 @@ impl SceneRenderer {
     }
 
     pub fn render_debug(&mut self, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()> {
+
+        profile_scope_fn!(&engine.frame_profiler);
 
         let debug_object_count = self.debug_render_context.object_count();
         if debug_object_count == 0 {

@@ -5,6 +5,7 @@ use log::{debug, info, warn};
 use shrev::ReaderId;
 use crate::application::{InputHandler, Key, Ticker};
 use crate::core::{CommandBuffer, Engine, FrameCompleteEvent, GraphicsManager, RecreateSwapchainEvent};
+use crate::{function_name, profile_scope_fn};
 
 pub struct GUIRenderer {
     ctx: egui::Context,
@@ -113,6 +114,8 @@ impl GUIRenderer {
     }
 
     pub fn render_gui(&mut self, ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer, resolution: [u32; 2], mut run_ui: impl FnMut(&mut Ticker, &mut Engine, &egui::Context)) -> Result<()> {
+
+        profile_scope_fn!(&engine.frame_profiler);
 
         if engine.graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
             self.on_recreate_swapchain(engine)?;

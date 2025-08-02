@@ -1,8 +1,13 @@
+use std::cell::{RefCell, UnsafeCell};
 use std::time::Instant;
 use crate::application::Ticker;
 use crate::core::Engine;
 
 pub struct FrameProfiler {
+    data: UnsafeCell<ProfilerData>
+}
+
+struct ProfilerData {
     all_frame_data: Vec<FrameSlice>,
     frame_indices: Vec<usize>,
     current_frame_stack: Vec<usize>,
@@ -15,23 +20,85 @@ struct FrameSlice {
     level: u32,
 }
 
+
+pub struct ScopedProfile<'a> {
+    // frame_profiler: &'a FrameProfiler,
+    frame_profiler: *const FrameProfiler,
+    name: &'a str
+}
+
+impl<'a> ScopedProfile<'a> {
+    pub fn begin(frame_profiler: &FrameProfiler, name: &'a str) -> Self {
+        frame_profiler.push_profile(name);
+
+        ScopedProfile {
+            frame_profiler: frame_profiler as *const _,
+            name
+        }
+    }
+}
+
+impl<'a> Drop for ScopedProfile<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.frame_profiler).pop_profile(self.name);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! function_name {
+    () => {{
+        fn f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            std::any::type_name::<T>()
+        }
+        let name = type_name_of(f);
+        name.strip_suffix("::f").unwrap()
+
+        // // Find and cut the rest of the path
+        // match &name[..name.len() - 3].rfind(':') {
+        //     Some(pos) => &name[pos + 1..name.len() - 3],
+        //     None => &name[..name.len() - 3],
+        // }
+    }}
+}
+
+#[macro_export]
+macro_rules! profile_scope {
+    ($profiler:expr, $name:expr) => {
+        let _scoped_profile_guard = $crate::core::ui::ScopedProfile::begin($profiler, $name);
+    };
+}
+#[macro_export]
+macro_rules! profile_scope_fn {
+    ($profiler:expr) => {
+        // let _fn_name = function_name!();
+        let _scoped_profile_guard = $crate::core::ui::ScopedProfile::begin($profiler, function_name!());
+    };
+}
+
 impl FrameProfiler {
     pub fn new() -> Self {
         FrameProfiler {
-            all_frame_data: vec![],
-            frame_indices: vec![],
-            current_frame_stack: vec![],
+            data: UnsafeCell::new(ProfilerData {
+                all_frame_data: vec![],
+                frame_indices: vec![],
+                current_frame_stack: vec![],
+            })
         }
     }
 
-    pub fn begin_frame(&mut self) {
-        assert_eq!(self.current_frame_stack.len(), 0, "begin_frame() - Profile stack is not empty");
+    pub fn begin_frame(&self) {
+        let data = unsafe { &mut *self.data.get() };
 
-        let index = self.all_frame_data.len();
-        self.current_frame_stack.push(index);
+        assert_eq!(data.current_frame_stack.len(), 0, "begin_frame() - Profile stack is not empty");
+
+        let index = data.all_frame_data.len();
+        data.current_frame_stack.push(index);
 
         let now = Instant::now();
-        self.all_frame_data.push(FrameSlice{
+        data.all_frame_data.push(FrameSlice{
             label: String::from("Frame"),
             time_start: now,
             time_end: now,
@@ -39,16 +106,20 @@ impl FrameProfiler {
         });
     }
 
-    pub fn end_frame(&mut self) {
-        assert_eq!(self.current_frame_stack.len(), 1, "end_frame() - Profile stack is not complete");
+    pub fn end_frame(&self) {
+        assert_eq!(unsafe { &mut *self.data.get() }.current_frame_stack.len(), 1, "end_frame() - Profile stack is not complete");
 
         let index = self.pop_profile("Frame");
-        self.frame_indices.push(index);
+
+        let data = unsafe { &mut *self.data.get() };
+        data.frame_indices.push(index);
     }
 
-    pub fn push_profile(&mut self, name: &str) {
-        let index = self.all_frame_data.len();
-        let parent_slice = self.current_slice();
+    pub fn push_profile(&self, name: &str) {
+        let data = unsafe { &mut *self.data.get() };
+
+        let index = data.all_frame_data.len();
+        let parent_slice = Self::current_slice(data);
 
         let now = Instant::now();
         let slice = FrameSlice{
@@ -58,25 +129,28 @@ impl FrameProfiler {
             level: parent_slice.level + 1,
         };
 
-        self.current_frame_stack.push(index);
-        self.all_frame_data.push(slice);
+        data.current_frame_stack.push(index);
+        data.all_frame_data.push(slice);
     }
 
-    pub fn pop_profile(&mut self, name: &str) -> usize {
-        let slice = self.current_slice();
+    pub fn pop_profile(&self, name: &str) -> usize {
+        let data = unsafe { &mut *self.data.get() };
+
+        let slice = Self::current_slice(data);
         slice.time_end = Instant::now();
         debug_assert!(slice.label == name, "pop_profile() - Mismatched profile, we are popping a different profile to what was started");
 
-        let index = self.current_frame_stack.pop().expect("pop_profile() - Profile stack underflow");
+        let index = data.current_frame_stack.pop().expect("pop_profile() - Profile stack underflow");
         index
     }
 
-    fn current_slice(&mut self) -> &mut FrameSlice {
-        let index = self.current_frame_stack.last().expect("current_slice() - Profile stack underflow");
-        self.all_frame_data.get_mut(*index).unwrap()
+    fn current_slice(data: &mut ProfilerData) -> &mut FrameSlice {
+        let index = data.current_frame_stack.last().expect("current_slice() - Profile stack underflow");
+        data.all_frame_data.get_mut(*index).unwrap()
     }
 
     pub fn draw_gui(&self, ticker: &mut Ticker, ctx: &egui::Context) {
+        let data = unsafe { &mut *self.data.get() };
 
         let plot_height = 220.0;
         let plot_width = 520.0;
@@ -90,11 +164,11 @@ impl FrameProfiler {
                 ui.set_min_size(egui::Vec2::new(plot_width, plot_height));
 
                 let max_frame_count = 300;
-                let start_index = self.frame_indices.len() - usize::min(self.frame_indices.len(), max_frame_count);
-                let recent_frame_indices = &self.frame_indices[start_index..];
+                let start_index = data.frame_indices.len() - usize::min(data.frame_indices.len(), max_frame_count);
+                let recent_frame_indices = &data.frame_indices[start_index..];
 
                 for (index, &offset) in recent_frame_indices.iter().enumerate() {
-                    let slice = &self.all_frame_data[offset];
+                    let slice = &data.all_frame_data[offset];
                     let dur_millis = slice.time_end.duration_since(slice.time_start).as_secs_f64() * 1000.0;
 
                     let x = index as f64;
