@@ -3,7 +3,7 @@ use crate::application::window::WindowResizedEvent;
 use crate::application::{App, Tickable, Ticker, Window};
 use crate::core::renderer::BeginFrameResult;
 use crate::core::scene::Scene;
-use crate::core::{debug_mesh, CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer, GUIRenderer, FrameProfiler};
+use crate::core::{debug_mesh, CommandBuffer, CommandBufferImpl, GraphicsManager, SceneRenderer, GUIRenderer, FrameProfiler, RenderCamera, VoxelRenderer};
 use anyhow::Result;
 use log::{error, info};
 use shrev::ReaderId;
@@ -24,8 +24,10 @@ pub struct Engine {
     pub graphics: GraphicsManager,
     pub scene: Scene,
     pub scene_renderer: SceneRenderer,
+    pub voxel_renderer: VoxelRenderer,
     pub ui_handler: GUIRenderer,
     pub frame_profiler: FrameProfiler,
+    pub render_camera: RenderCamera,
     user_app: Option<Box<dyn App>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
     next_resource_id: u64,
@@ -47,7 +49,7 @@ impl Engine {
         let window = Window::new("Test Game", 640, 480)
             .inspect_err(|_| error!("Failed to create application window"))?;
 
-        let graphics = GraphicsManager::new(window.sdl_window_handle())
+        let mut graphics = GraphicsManager::new(window.sdl_window_handle())
             .inspect_err(|_| error!("Failed to create GraphicsManager"))?;
 
         let scene = Scene::new()
@@ -56,10 +58,15 @@ impl Engine {
         let scene_renderer = SceneRenderer::new(&graphics)
             .inspect_err(|_| error!("Failed to create SceneRenderer"))?;
 
+        let voxel_renderer = VoxelRenderer::new(&graphics)
+            .inspect_err(|_| error!("Failed to create VoxelRenderer"))?;
+
         let ui_handler = GUIRenderer::new(&graphics)
             .inspect_err(|_| error!("Failed to create UIHandler"))?;
 
         let frame_profiler = FrameProfiler::new();
+
+        let render_camera = RenderCamera::new(&mut graphics);
 
         // let user_app = Some(user_app);
         let user_app = Box::new(user_app);
@@ -71,8 +78,10 @@ impl Engine {
             graphics,
             scene,
             scene_renderer,
+            voxel_renderer,
             ui_handler,
             frame_profiler,
+            render_camera,
             user_app,
             event_window_resized: None,
             next_resource_id: 0,
@@ -141,6 +150,14 @@ impl Engine {
         }
     }
 
+    pub fn render_camera(&self) -> &RenderCamera {
+        &self.render_camera
+    }
+
+    pub fn render_camera_mut(&mut self) -> &mut RenderCamera {
+        &mut self.render_camera
+    }
+
     pub fn user_app(&self) -> &dyn App {
         self.user_app.as_ref().unwrap().as_ref()
     }
@@ -158,6 +175,8 @@ impl Engine {
         unsafe { self.user_app_mut().register_events(&mut *self_ptr) }?;
 
         unsafe { self.scene_renderer.register_events(&mut *self_ptr) }?;
+
+        unsafe { self.voxel_renderer.register_events(&mut *self_ptr) }?;
 
         unsafe { self.ui_handler.register_events(&mut *self_ptr) }?;
 
@@ -178,13 +197,17 @@ impl Engine {
 
         // dirty hack ;)
         let self_ptr: *mut Self = self;
-        
+
 
         unsafe { self.user_app_mut().pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
+        unsafe { self.scene.pre_render(ticker, &mut *self_ptr) }?;
+
         unsafe { self.scene_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
 
-        unsafe { self.scene.pre_render(ticker, &mut *self_ptr) }?;
+        unsafe { self.voxel_renderer.pre_render(ticker, &mut *self_ptr, cmd_buf) }?;
+
+        self.scene.clear_trackers();
 
         Ok(())
     }
@@ -216,9 +239,13 @@ impl Engine {
 
         unsafe { self.user_app_mut().render(ticker, &mut *self_ptr, cmd_buf) }?;
 
-        unsafe { self.scene_renderer.render(ticker, &mut *self_ptr, cmd_buf) }?;
+        self.render_camera.update(&mut self.graphics)?;
 
         unsafe { self.scene.render(ticker, &mut *self_ptr) }?;
+
+        unsafe { self.scene_renderer.render(&self.render_camera, ticker, &mut *self_ptr, cmd_buf) }?;
+
+        unsafe { self.voxel_renderer.render(&self.render_camera, ticker, &mut *self_ptr, cmd_buf) }?;
 
         unsafe { self.ui_handler.render_gui(ticker, &mut *self_ptr, cmd_buf, self.graphics.resolution(), Self::run_gui)?; }
 

@@ -2145,6 +2145,11 @@ impl GraphicsManager {
         // self.swapchain_info.current_image_idx as usize
     }
 
+    pub fn previous_frame_index(&self) -> usize {
+        (self.current_frame_index + self.max_concurrent_frames - 1) % self.max_concurrent_frames
+        // self.swapchain_info.current_image_idx as usize
+    }
+
     // pub fn get_current_graphics_cmd_buffer(&self) -> &Arc<CommandBuffer> {
     //     let a = self.swapchain_info.command_buffers.get(self.current_frame_index as usize)
     //         .ok_or_else(|| anyhow!("Failed to get command buffer for frame {}", self.swapchain_info.current_frame_idx));

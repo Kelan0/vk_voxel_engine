@@ -658,82 +658,6 @@ use std::any::Any;
             self.dirty = true;
         }
 
-        // fn update_neighbour_flags(&mut self, pos: IVec3, center_index: usize) {
-        //     // Do we have a neighbour in the POS_X direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::X, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
-        //         }
-        //     }
-        //
-        //     // Do we have a neighbour in the NEG_X direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_X, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
-        //         }
-        //     }
-        //
-        //     // Do we have a neighbour in the POS_Y direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Y, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
-        //         }
-        //     }
-        //
-        //     // Do we have a neighbour in the NEG_Y direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Y, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
-        //         }
-        //     }
-        //
-        //     // Do we have a neighbour in the POS_Z direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Z, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
-        //         }
-        //     }
-        //
-        //     // Do we have a neighbour in the NEG_Z direction
-        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Z, CHUNK_BOUNDS) {
-        //         let neighbour_index = neighbour_index as usize;
-        //         if self.blocks[neighbour_index] != 0 {
-        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
-        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
-        //         }
-        //     }
-        // }
-        //
-        // fn replace_block_flags(&mut self, index: usize, flags: u8) {
-        //     self.block_flags[index] = flags;
-        // }
-        //
-        // fn set_block_flags(&mut self, index: usize, flags: u8) {
-        //     self.block_flags[index] |= flags;
-        // }
-        //
-        // fn unset_block_flags(&mut self, index: usize, flags: u8) {
-        //     self.block_flags[index] &= !flags;
-        // }
-        //
-        // fn toggle_block_flags(&mut self, index: usize, flags: u8) {
-        //     self.block_flags[index] ^= flags;
-        // }
-        //
-        // fn mask_block_flags(&mut self, index: usize, flags: u8) {
-        //     self.block_flags[index] &= flags;
-        // }
-
         pub fn update_mesh_data(&mut self) -> Result<()> {
             if self.dirty {
                 self.dirty = false;
@@ -844,29 +768,29 @@ use std::any::Any;
                             // let xyz_index_z_p1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, 0, 1), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
                             // let xyz_index_z_n1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, 0, -1), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
 
-                            let block_x_p1 = if x < (dim_x - 1) {
-                                assert_eq!(xyz_index_x_p1, calc_index_for_coord(UVec3::new((x + 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
-                                self.blocks[xyz_index_x_p1]
-                            } else { 0 };
                             let block_x_n1 = if x > 0 {
-                                assert_eq!(xyz_index_x_n1, calc_index_for_coord(UVec3::new((x - 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                // assert_eq!(xyz_index_x_n1, calc_index_for_coord(UVec3::new((x - 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
                                 self.blocks[xyz_index_x_n1]
                             } else { 0 };
-                            let block_y_p1 = if y < (dim_y - 1) {
-                                assert_eq!(xyz_index_y_p1, calc_index_for_coord(UVec3::new(x as u32, (y + 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
-                                self.blocks[xyz_index_y_p1]
+                            let block_x_p1 = if x < (dim_x - 1) {
+                                // assert_eq!(xyz_index_x_p1, calc_index_for_coord(UVec3::new((x + 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_x_p1]
                             } else { 0 };
                             let block_y_n1 = if y > 0 {
-                                assert_eq!(xyz_index_y_n1, calc_index_for_coord(UVec3::new(x as u32, (y - 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                // assert_eq!(xyz_index_y_n1, calc_index_for_coord(UVec3::new(x as u32, (y - 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
                                 self.blocks[xyz_index_y_n1]
                             } else { 0 };
-                            let block_z_p1 = if z < (dim_z - 1) {
-                                assert_eq!(xyz_index_z_p1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z + 1) as u32), CHUNK_BOUNDS) as usize);
-                                self.blocks[xyz_index_z_p1]
+                            let block_y_p1 = if y < (dim_y - 1) {
+                                // assert_eq!(xyz_index_y_p1, calc_index_for_coord(UVec3::new(x as u32, (y + 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_y_p1]
                             } else { 0 };
                             let block_z_n1 = if z > 0 {
-                                assert_eq!(xyz_index_z_n1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z - 1) as u32), CHUNK_BOUNDS) as usize);
+                                // assert_eq!(xyz_index_z_n1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z - 1) as u32), CHUNK_BOUNDS) as usize);
                                 self.blocks[xyz_index_z_n1]
+                            } else { 0 };
+                            let block_z_p1 = if z < (dim_z - 1) {
+                                // assert_eq!(xyz_index_z_p1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z + 1) as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_z_p1]
                             } else { 0 };
 
                             let has_all_neighbours =

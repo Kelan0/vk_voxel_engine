@@ -69,12 +69,11 @@ impl Scene {
         // // self.ecs.entity(entity).despawn();
         self.ecs.despawn(entity);
     }
-    
+
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         profile_scope_fn!(&engine.frame_profiler);
         
         // let r = self.world.increment_change_tick();
-        self.ecs.clear_trackers();
 
         let mut query = self.ecs.query::<(bevy_ecs::entity::Entity, &mut UpdateComponent)>();
 
@@ -88,7 +87,7 @@ impl Scene {
         //     on_render(entity, ticker, engine);
         // }
         
-        self.world.update_player_position(engine.scene_renderer.camera().position());
+        self.world.update_player_position(engine.render_camera().camera.position());
         
         Ok(())
     }
@@ -100,6 +99,10 @@ impl Scene {
         self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
 
         Ok(())
+    }
+
+    pub fn clear_trackers(&mut self) {
+        self.ecs.clear_trackers();
     }
 
     pub fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {

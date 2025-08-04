@@ -1,5 +1,16 @@
-use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot, Mat3, Mat4, Quat, Vec3};
-use vulkano::buffer::BufferContents;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use crate::core::{GraphicsManager, RecreateSwapchainEvent};
+use anyhow::{anyhow, Result};
+use ash::vk::{DeviceSize, Handle};
+use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot, Mat4};
+use log::error;
+use shrev::ReaderId;
+use std::sync::Arc;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::pipeline::{GraphicsPipeline, Pipeline};
+use vulkano::VulkanObject;
 
 #[derive(Clone, PartialEq)]
 pub struct Camera {
@@ -15,6 +26,19 @@ pub struct Camera {
     projection_matrix: Mat4,
     view_projection_matrix: DMat4,
 }
+
+pub struct RenderCamera {
+    pub camera: Camera,
+    resources: Vec<FrameResource>,
+    event_recreate_swapchain: Option<ReaderId<RecreateSwapchainEvent>>,
+}
+
+struct FrameResource {
+    buffer_camera_uniforms: Option<Subbuffer<CameraDataUBO>>,
+    did_changed_buffer: bool,
+    gpu_resource_hash: u64,
+}
+
 
 impl Camera {
     pub fn new() -> Self {
@@ -259,6 +283,128 @@ impl Default for Camera {
         }
     }
 }
+
+
+
+
+
+impl RenderCamera {
+    pub fn new(graphics: &mut GraphicsManager) -> Self {
+        let event_recreate_swapchain = Some(graphics.event_bus().register::<RecreateSwapchainEvent>());
+
+        RenderCamera {
+            camera: Camera::new(),
+            resources: vec![],
+            event_recreate_swapchain,
+        }
+    }
+
+    pub fn init_resources(&mut self, graphics: &mut GraphicsManager) -> Result<()> {
+
+        let memory_allocator = graphics.memory_allocator();
+
+        self.resources.clear();
+        self.resources.resize_with(graphics.max_concurrent_frames(), || {
+            FrameResource {
+                buffer_camera_uniforms: None,
+                did_changed_buffer: false,
+                gpu_resource_hash: 0,
+            }
+        });
+
+        let buffer_create_info = BufferCreateInfo{
+            usage: BufferUsage::UNIFORM_BUFFER,
+            ..Default::default()
+        };
+
+        let allocation_info = AllocationCreateInfo{
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        };
+
+        // Allocate a GPU buffer for the camera uniform data
+        let uniform_buffer_camera = Buffer::new_slice::<CameraDataUBO>(memory_allocator.clone(), buffer_create_info, allocation_info, self.resources.len() as DeviceSize)?;
+
+        for (i, resource) in self.resources.iter_mut().enumerate() {
+            let buf = uniform_buffer_camera.clone().index(i as DeviceSize);
+
+            let mut hasher = DefaultHasher::new();
+            buf.buffer().hash(&mut hasher);
+            i.hash(&mut hasher);
+            resource.gpu_resource_hash = hasher.finish();
+            // resource.gpu_resource_hash = buf.buffer().handle().as_raw();
+
+            resource.buffer_camera_uniforms = Some(buf);
+            resource.did_changed_buffer = true;
+        }
+
+        Ok(())
+    }
+
+    pub fn update(&mut self, graphics: &mut GraphicsManager) -> Result<bool> {
+        self.camera.update();
+
+        if !self.resources.is_empty() {
+            let resource = &mut self.resources[graphics.previous_frame_index()];
+            resource.did_changed_buffer = false;
+        }
+
+        if self.resources.is_empty() || graphics.event_bus().has_any_opt(&mut self.event_recreate_swapchain) {
+            self.init_resources(graphics)?;
+        }
+
+        let resource = &mut self.resources[graphics.current_frame_index()];
+        let uniform_buffer_camera = resource.buffer_camera_uniforms.as_ref().unwrap();
+
+        match uniform_buffer_camera.write() {
+            Ok(mut write) => self.camera.update_camera_buffer(&mut write),
+            Err(err) => error!("Unable to write camera data: {err}")
+        }
+
+        Ok(resource.did_changed_buffer)
+    }
+
+    pub fn create_camera_descriptor_sets(&self, set: u32, binding: u32, graphics_pipeline: &GraphicsPipeline, graphics: &GraphicsManager) -> Result<Arc<DescriptorSet>> {
+
+        let descriptor_set_allocator = graphics.descriptor_set_allocator();
+
+        let pipeline_layout = graphics_pipeline.layout();
+        let descriptor_set_layouts = pipeline_layout.set_layouts();
+
+        // let buffer_camera_uniforms = resource.buffer_camera_uniforms.as_ref().unwrap();
+        let buffer_camera_uniforms = self.buffer_camera_uniforms(graphics.current_frame_index()).as_ref()
+            .ok_or_else(|| anyhow!("create_camera_descriptor_sets() - Camera uniform buffer is not initialized (maybe update() wasn't called first?)"))?;
+
+        // Camera info descriptor set
+        let descriptor_set_layout = descriptor_set_layouts.get(set as usize)
+            .ok_or_else(|| anyhow!("create_camera_descriptor_sets() - Specified descriptor set {set} was not found in the descriptor set layouts for the supplied GraphicsPipeline"))?;
+
+        if !descriptor_set_layout.bindings().contains_key(&binding) {
+            return Err(anyhow!("create_camera_descriptor_sets() - Specified binding {binding} for descriptor set {set} was not found in this descriptor set layout for the supplied GraphicsPipeline"));
+        }
+
+        let descriptor_writes = [WriteDescriptorSet::buffer(binding, buffer_camera_uniforms.clone())];
+        let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), descriptor_writes, [])?;
+
+        Ok(descriptor_set)
+    }
+
+    pub fn buffer_camera_uniforms(&self, frame_index: usize) -> &Option<Subbuffer<CameraDataUBO>> {
+        &self.resources[frame_index].buffer_camera_uniforms
+    }
+
+    pub fn did_changed_buffer(&self, frame_index: usize) -> bool {
+        self.resources[frame_index].did_changed_buffer
+    }
+
+    pub fn gpu_resource_hash(&self, frame_index: usize) -> u64 {
+        self.resources[frame_index].gpu_resource_hash
+    }
+}
+
+
+
+
 
 #[derive(BufferContents)]
 #[repr(C)]

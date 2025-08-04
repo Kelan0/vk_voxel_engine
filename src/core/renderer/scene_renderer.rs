@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, FrameCompleteEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, FrameCompleteEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture, RenderCamera};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
@@ -179,7 +179,8 @@ pub struct SceneRenderer {
     debug_lines_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     resources: Vec<FrameResource>,
     wireframe_mode: WireframeMode,
-    camera: Camera,
+    // render_camera: RenderCamera,
+    // camera: Camera,
     // meshes: Vec<Mesh<BaseVertex>>, // temporary
 
     textures: Vec<Texture>,
@@ -211,7 +212,7 @@ pub struct SceneRenderer {
 }
 
 struct FrameResource {
-    buffer_camera_uniforms: Option<Subbuffer<CameraDataUBO>>,
+    // buffer_camera_uniforms: Option<Subbuffer<CameraDataUBO>>,
     buffer_object_data: Option<Subbuffer<[ObjectDataUBO]>>,
     buffer_object_indices: Option<Subbuffer<[ObjectIndexUBO]>>,
     buffer_material_data: Option<Subbuffer<[MaterialUBO]>>,
@@ -224,6 +225,7 @@ struct FrameResource {
     static_scene_changed: bool,
     textures_changed: bool,
     materials_changed: bool,
+    camera_hash: u64,
 
     buffer_debug_object_data: Option<Subbuffer<[DebugObjectDataUBO]>>,
     buffer_debug_object_indices: Option<Subbuffer<[ObjectIndexUBO]>>,
@@ -294,7 +296,8 @@ impl SceneRenderer {
             debug_lines_graphics_pipeline: None,
             resources: vec![],
             wireframe_mode: WireframeMode::Solid,
-            camera: Camera::new(),
+            // render_camera: RenderCamera::new(graphics),
+            // camera: Camera::new(),
 
             textures: vec![],
             materials: vec![],
@@ -343,11 +346,8 @@ impl SceneRenderer {
     
     fn init_resources(&mut self, engine: &mut Engine) -> Result<()> {
 
-        let memory_allocator = engine.graphics.memory_allocator();
-
         self.resources.resize_with(engine.graphics.max_concurrent_frames(), || {
             FrameResource{
-                buffer_camera_uniforms: None,
                 buffer_object_data: None,
                 buffer_object_indices: None,
                 buffer_material_data: None,
@@ -360,6 +360,7 @@ impl SceneRenderer {
                 static_scene_changed: false,
                 textures_changed: false,
                 materials_changed: false,
+                camera_hash: 0,
 
                 buffer_debug_object_data: None,
                 buffer_debug_object_indices: None,
@@ -370,31 +371,13 @@ impl SceneRenderer {
             }
         });
 
-        for resource in &mut self.resources {
-
-            let buffer_create_info = BufferCreateInfo{
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            };
-
-            let allocation_info = AllocationCreateInfo{
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            };
-
-            let uniform_buffer_camera = Buffer::new_sized::<CameraDataUBO>(memory_allocator.clone(), buffer_create_info, allocation_info)?;
-            // let uniform_buffer_camera = Buffer::from_data(memory_allocator.clone(), buffer_create_info, allocation_info, camera_data)?;
-
-            resource.buffer_camera_uniforms = Some(uniform_buffer_camera);
-
-        }
-        
         Ok(())
     }
 
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         profile_scope_fn!(&engine.frame_profiler);
+
 
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
             let mut query = engine.scene.ecs.query::<(&mut RenderComponent<BaseVertex>, &Transform)>();
@@ -440,29 +423,35 @@ impl SceneRenderer {
             error!("Error writing buffers for frame: {frame_index} - Error was: {r}");
         }
 
-        self.camera.update();
+
+        // self.camera.update();
 
         // info!("Camera position: {:?}, Direction: {:?} - fov={}, aspect={}, far={}", self.camera.position(), self.camera.z_axis(), self.camera.fov(), self.camera.aspect_ratio(), self.camera.far_plane());
-
-
 
         Ok(())
     }
 
-    pub fn render(&mut self, _ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()> {
+    pub fn render(&mut self, camera: &RenderCamera, _ticker: &mut Ticker, engine: &mut Engine, cmd_buf: &mut CommandBuffer) -> Result<()> {
 
         profile_scope_fn!(&engine.frame_profiler);
 
         let viewport = engine.graphics.get_viewport();
 
-        let resource = Self::curr_resource(&mut self.resources, engine);
+        let frame_index = engine.graphics.current_frame_index();
+        let resource = &mut self.resources[frame_index];
 
-        let uniform_buffer_camera = resource.buffer_camera_uniforms.as_ref().unwrap();
-
-        match uniform_buffer_camera.write() {
-            Ok(mut write) => self.camera.update_camera_buffer(&mut write),
-            Err(err) => error!("Unable to write camera data: {err}")
+        if Self::check_changed_camera(camera, resource, frame_index) {
+            // debug!("=========== XX UPDATING CAMERA DESCRIPTOR SETS XX ===========");
+            Self::create_camera_descriptor_sets(&camera, resource, self.solid_graphics_pipeline.as_ref().unwrap(), &engine.graphics)?;
+            resource.camera_hash = camera.gpu_resource_hash(frame_index);
         }
+
+        // let uniform_buffer_camera = resource.buffer_camera_uniforms.as_ref().unwrap();
+        //
+        // match uniform_buffer_camera.write() {
+        //     Ok(mut write) => self.camera.update_camera_buffer(&mut write),
+        //     Err(err) => error!("Unable to write camera data: {err}")
+        // }
 
         let graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
         let descriptor_set_camera = resource.descriptor_set_camera.as_ref().unwrap();
@@ -503,7 +492,9 @@ impl SceneRenderer {
         // debug!("{} debug meshes", debug_object_count);
 
         let allocator = engine.graphics.memory_allocator();
-        let resource = Self::curr_resource(&mut self.resources, engine);
+
+        let frame_index = engine.graphics.current_frame_index();
+        let resource = &mut self.resources[frame_index];
 
         if !self.debug_render_context.immediate_meshes.is_empty() {
 
@@ -575,6 +566,10 @@ impl SceneRenderer {
 
         self.debug_render_context.reset();
         Ok(())
+    }
+
+    fn check_changed_camera(camera: &RenderCamera, resource: &FrameResource, frame_index: usize) -> bool {
+        camera.gpu_resource_hash(frame_index) != resource.camera_hash
     }
 
     fn check_changed_entities(&mut self, scene: &mut Scene) {
@@ -976,7 +971,7 @@ impl SceneRenderer {
     }
 
     fn create_main_graphics_pipeline(&mut self, engine: &Engine) -> Result<()> {
-        info!("Initialize main GraphicsPipeline");
+        info!("Initialize SceneRenderer GraphicsPipeline");
         let device = engine.graphics.device();
         let render_pass = engine.graphics.render_pass();
 
@@ -1109,22 +1104,24 @@ impl SceneRenderer {
         Ok(())
     }
 
+    fn create_camera_descriptor_sets(camera: &RenderCamera, resource: &mut FrameResource, graphics_pipeline: &GraphicsPipeline, graphics: &GraphicsManager) -> Result<()> {
+
+        let descriptor_set = camera.create_camera_descriptor_sets(0, 0, graphics_pipeline, graphics)?;
+        resource.descriptor_set_camera = Some(descriptor_set);
+
+        Ok(())
+    }
+
     fn create_main_descriptor_sets(resource: &mut FrameResource, graphics_pipeline: &GraphicsPipeline, graphics: &GraphicsManager) -> Result<()> {
         debug!("SceneRenderer - create_main_descriptor_sets");
 
         let descriptor_set_allocator = graphics.descriptor_set_allocator();
 
-        let buffer_camera_uniforms = resource.buffer_camera_uniforms.as_ref().unwrap();
+        // let buffer_camera_uniforms = resource.buffer_camera_uniforms.as_ref().unwrap();
 
         let pipeline_layout = graphics_pipeline.layout();
         let descriptor_set_layouts = pipeline_layout.set_layouts();
 
-        // Camera info descriptor set
-        let descriptor_set_layout_index = 0;
-        let descriptor_set_layout = descriptor_set_layouts.get(descriptor_set_layout_index).unwrap();
-        let descriptor_writes = [WriteDescriptorSet::buffer(0, buffer_camera_uniforms.clone())];
-        let descriptor_set = DescriptorSet::new(descriptor_set_allocator.clone(), descriptor_set_layout.clone(), descriptor_writes, [])?;
-        resource.descriptor_set_camera = Some(descriptor_set);
 
         // World info descriptor set
         let descriptor_set_layout_index = 1;
@@ -1420,15 +1417,6 @@ impl SceneRenderer {
         Texture::create_default_sampler(device)
     }
 
-    fn curr_resource<'a>(resources: &'a mut [FrameResource], engine: &Engine) -> &'a mut FrameResource {
-        Self::resource(resources, engine.graphics.current_frame_index())
-    }
-
-    fn resource(resources: &mut [FrameResource], index: usize) -> &mut FrameResource {
-        // self.resources[index].as_mut().unwrap()
-        &mut resources[index]
-    }
-
     // pub fn add_mesh(&mut self, mesh: Mesh<BaseVertex>) {
     //     self.meshes.push(mesh);
     // }
@@ -1439,14 +1427,6 @@ impl SceneRenderer {
 
     pub fn wireframe_mode(&self) -> WireframeMode {
         self.wireframe_mode
-    }
-
-    pub fn camera(&self) -> &Camera {
-        &self.camera
-    }
-
-    pub fn camera_mut(&mut self) -> &mut Camera {
-        &mut self.camera
     }
 
     pub fn debug_render_context(&mut self) -> &mut DebugRenderContext {

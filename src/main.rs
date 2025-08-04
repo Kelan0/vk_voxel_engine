@@ -166,7 +166,7 @@ impl App for TestGame {
 
         // engine.scene_renderer.add_mesh(mesh);
 
-        let camera = engine.scene_renderer.camera_mut();
+        let camera = &mut engine.render_camera_mut().camera;
         camera.set_perspective(70.0, 4.0 / 3.0, 0.1, 64.0);
         camera.set_position(DVec3::new(1.0, 0.0, -3.0));
 
@@ -243,7 +243,7 @@ impl App for TestGame {
             .read_one_opt_ref(&mut self.event_window_resized)
         {
             let aspect_ratio = event.width as f32 / event.height as f32;
-            let camera = engine.scene_renderer.camera_mut();
+            let camera = &mut engine.render_camera_mut().camera;
             camera.set_aspect_ratio(aspect_ratio);
         }
 
@@ -301,7 +301,7 @@ impl App for TestGame {
 
         if window.is_mouse_grabbed() {
 
-            let camera = engine.scene_renderer.camera_mut();
+            // let camera = engine.scene_renderer.camera_mut();
 
             let mouse_motion = window.input().relative_mouse_pos();
             let delta_pitch = (mouse_motion.y * 0.04) as f64;
@@ -324,6 +324,8 @@ impl App for TestGame {
                 self.move_speed /= 1.5;
                 info!("Scroll down - move speed: {}", self.move_speed);
             }
+
+            let camera = &mut engine.render_camera.camera;
 
             if window.input().mouse_pressed(MouseButton::Left) {
                 self.add_test_entity(&mut engine.scene, (camera.position() + camera.z_axis() * 2.0).as_vec3());
