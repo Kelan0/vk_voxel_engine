@@ -10,6 +10,7 @@ mod render_component;
 mod mesh_data;
 mod texture;
 mod material;
+mod voxel_renderer;
 
 pub use graphics_manager::GraphicsManager;
 

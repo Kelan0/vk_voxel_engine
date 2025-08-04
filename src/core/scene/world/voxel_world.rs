@@ -1,13 +1,14 @@
 
 pub mod world {
-    use crate::core::ScopedProfile;
+    use crate::core::{AxisDirection, ScopedProfile};
 use std::any::Any;
+    use std::array;
     use std::num::NonZero;
     use anyhow::Result;
     use ash::vk::DeviceSize;
     use foldhash::HashMap;
     use foldhash::HashMapExt;
-    use glam::{DVec3, IVec3, U8Vec4, UVec3, Vec3};
+    use glam::{DVec3, IVec3, U16Vec2, U8Vec4, UVec3, Vec3};
     use log::{debug, warn};
 
     use std::sync::{Arc, Mutex};
@@ -46,15 +47,16 @@ use std::any::Any;
         // entity: Entity<'static>,
         chunk_pos: IVec3,
         blocks: [u32; CHUNK_BLOCK_COUNT],
-        block_flags: [u8; CHUNK_BLOCK_COUNT],
+        // block_flags: [u8; CHUNK_BLOCK_COUNT],
         dirty: bool,
-        updated_mesh_data: Option<MeshData<BaseVertex>>,
-        mesh: Option<Arc<Mesh<BaseVertex>>>,
+        block_count: u32,
+        updated_mesh_data: [Option<MeshData<BaseVertex>>; 6],
+        mesh: [Option<Arc<Mesh<BaseVertex>>>; 6],
         unloaded_block_edits: HashMap<UVec3, u32>,
     }
 
     pub struct VoxelChunkEntity {
-        entity_id: bevy_ecs::entity::Entity,
+        entity_id: [bevy_ecs::entity::Entity; 6],
         chunk_data: Option<Box<VoxelChunkData>>,
     }
 
@@ -105,7 +107,7 @@ use std::any::Any;
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 12,
+                chunk_load_radius: 3,
                 max_async_chunks_per_frame: 32,
                 world_generator,
                 chunk_loader,
@@ -505,12 +507,15 @@ use std::any::Any;
             let chunk_pos = *chunk_data.chunk_pos();
             let pos = get_chunk_world_pos(chunk_pos);
 
-            let mut entity = engine.scene.create_entity(format!("chunk({},{},{})", chunk_pos.x, chunk_pos.y, chunk_pos.z).as_str());
-            entity.add_component(*Transform::new().set_translation(pos.as_vec3()));
-            entity.add_component(RenderComponent::<BaseVertex>::new(RenderType::Static, None));
+            let entity_id: [_; 6] = array::from_fn(|i| {
+                let mut entity = engine.scene.create_entity(format!("chunk({},{},{})/{}", chunk_pos.x, chunk_pos.y, chunk_pos.z, AxisDirection::from_index(i as u32).unwrap().name()).as_str());
+                entity.add_component(*Transform::new().set_translation(pos.as_vec3()));
+                entity.add_component(RenderComponent::<BaseVertex>::new(RenderType::Static, None));
+                entity.id().id()
+            });
 
             VoxelChunkEntity {
-                entity_id: entity.id().id(),
+                entity_id,
                 chunk_data: Some(chunk_data)
             }
         }
@@ -522,8 +527,10 @@ use std::any::Any;
 
 
             if did_update_mesh {
-                if let Some(mut render_component) = engine.scene.ecs.get_mut::<RenderComponent<BaseVertex>>(self.entity_id) {
-                    render_component.mesh = chunk_data.mesh.clone();
+                for i in 0..6 {
+                    if let Some(mut render_component) = engine.scene.ecs.get_mut::<RenderComponent<BaseVertex>>(self.entity_id[i]) {
+                        render_component.mesh = chunk_data.mesh[i].clone();
+                    }
                 }
 
                 // engine.scene.ecs.modify_component(self.entity_id, |render_component: &mut RenderComponent<BaseVertex>| {
@@ -535,7 +542,9 @@ use std::any::Any;
         }
 
         fn unload(&mut self, engine: &mut Engine) {
-            engine.scene.destroy_entity(self.entity_id);
+            for i in 0..6 {
+                engine.scene.destroy_entity(self.entity_id[i]);
+            }
         }
 
         // fn update_mesh_data(&mut self) -> Result<()>{
@@ -588,11 +597,11 @@ use std::any::Any;
             VoxelChunkData {
                 chunk_pos,
                 blocks: [0; CHUNK_BLOCK_COUNT],
-                block_flags: [0; CHUNK_BLOCK_COUNT],
-                // block_count: 0,
+                // block_flags: [0; CHUNK_BLOCK_COUNT],
+                block_count: 0,
                 dirty: true,
-                updated_mesh_data: None,
-                mesh: None,
+                updated_mesh_data: Default::default(), // [None; 6]
+                mesh: Default::default(), // [None; 6]
                 unloaded_block_edits: HashMap::new(),
             }
         }
@@ -601,8 +610,9 @@ use std::any::Any;
             &self.chunk_pos
         }
 
-        pub fn mesh(&self) -> Option<&Arc<Mesh<BaseVertex>>> {
-            self.mesh.as_ref()
+        pub fn mesh(&self, dir: AxisDirection) -> Option<&Arc<Mesh<BaseVertex>>> {
+            self.mesh[dir.index() as usize].as_ref()
+            // self.mesh.as_ref()
         }
 
         pub fn get_block(&self, pos: UVec3) -> u32 {
@@ -617,173 +627,367 @@ use std::any::Any;
 
             if prev_block != block {
 
-                let pos = pos.as_ivec3();
-                self.update_neighbour_flags(pos, index);
+                // let pos = pos.as_ivec3();
+                // self.update_neighbour_flags(pos, index);
 
-                // if prev_block == 0 && block != 0 {
-                //     self.block_count += 1;
-                //
-                // } else if prev_block != 0 && block == 0 {
-                //     self.block_count -= 1;
-                // }
+                if prev_block == 0 && block != 0 {
+                    self.block_count += 1;
+
+                } else if prev_block != 0 && block == 0 {
+                    self.block_count -= 1;
+                }
 
                 self.dirty = true;
             }
         }
 
         pub fn set_blocks(&mut self, start_index: u32, end_index: u32, block: u32) {
+            let is_solid = block != 0;
             for i in start_index .. end_index {
-                self.blocks[i as usize] = block;
+                let prev_block = &mut self.blocks[i as usize];
+                if *prev_block != block {
+                    *prev_block = block;
+
+                    if is_solid {
+                        self.block_count += 1;
+                    } else {
+                        self.block_count -= 1;
+                    }
+                }
             }
             self.dirty = true;
         }
 
-        fn update_neighbour_flags(&mut self, pos: IVec3, center_index: usize) {
-            // Do we have a neighbour in the POS_X direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::X, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
-                }
-            }
-
-            // Do we have a neighbour in the NEG_X direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_X, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
-                }
-            }
-
-            // Do we have a neighbour in the POS_Y direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Y, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
-                }
-            }
-
-            // Do we have a neighbour in the NEG_Y direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Y, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
-                }
-            }
-
-            // Do we have a neighbour in the POS_Z direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Z, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
-                }
-            }
-
-            // Do we have a neighbour in the NEG_Z direction
-            if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Z, CHUNK_BOUNDS) {
-                let neighbour_index = neighbour_index as usize;
-                if self.blocks[neighbour_index] != 0 {
-                    self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
-                    self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
-                }
-            }
-        }
-
-        fn replace_block_flags(&mut self, index: usize, flags: u8) {
-            self.block_flags[index] = flags;
-        }
-
-        fn set_block_flags(&mut self, index: usize, flags: u8) {
-            self.block_flags[index] |= flags;
-        }
-
-        fn unset_block_flags(&mut self, index: usize, flags: u8) {
-            self.block_flags[index] &= !flags;
-        }
-
-        fn toggle_block_flags(&mut self, index: usize, flags: u8) {
-            self.block_flags[index] ^= flags;
-        }
-
-        fn mask_block_flags(&mut self, index: usize, flags: u8) {
-            self.block_flags[index] &= flags;
-        }
+        // fn update_neighbour_flags(&mut self, pos: IVec3, center_index: usize) {
+        //     // Do we have a neighbour in the POS_X direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::X, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
+        //         }
+        //     }
+        //
+        //     // Do we have a neighbour in the NEG_X direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_X, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_X);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_X);
+        //         }
+        //     }
+        //
+        //     // Do we have a neighbour in the POS_Y direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Y, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
+        //         }
+        //     }
+        //
+        //     // Do we have a neighbour in the NEG_Y direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Y, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Y);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Y);
+        //         }
+        //     }
+        //
+        //     // Do we have a neighbour in the POS_Z direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::Z, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
+        //         }
+        //     }
+        //
+        //     // Do we have a neighbour in the NEG_Z direction
+        //     if let Some(neighbour_index) = calc_index_for_coord_offset(pos, IVec3::NEG_Z, CHUNK_BOUNDS) {
+        //         let neighbour_index = neighbour_index as usize;
+        //         if self.blocks[neighbour_index] != 0 {
+        //             self.set_block_flags(neighbour_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_POS_Z);
+        //             self.set_block_flags(center_index, Self::BLOCK_FLAG_HAS_NEIGHBOUR_NEG_Z);
+        //         }
+        //     }
+        // }
+        //
+        // fn replace_block_flags(&mut self, index: usize, flags: u8) {
+        //     self.block_flags[index] = flags;
+        // }
+        //
+        // fn set_block_flags(&mut self, index: usize, flags: u8) {
+        //     self.block_flags[index] |= flags;
+        // }
+        //
+        // fn unset_block_flags(&mut self, index: usize, flags: u8) {
+        //     self.block_flags[index] &= !flags;
+        // }
+        //
+        // fn toggle_block_flags(&mut self, index: usize, flags: u8) {
+        //     self.block_flags[index] ^= flags;
+        // }
+        //
+        // fn mask_block_flags(&mut self, index: usize, flags: u8) {
+        //     self.block_flags[index] &= flags;
+        // }
 
         pub fn update_mesh_data(&mut self) -> Result<()> {
             if self.dirty {
                 self.dirty = false;
 
-                let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                // let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_neg_x = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_pos_x = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_neg_y = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_pos_y = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_neg_z = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_pos_z = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
 
                 // let p1 = (CHUNK_SIZE as f32) * 0.5;
                 // mesh_data.create_cuboid([p1, p1, p1], [p1, p1, p1]);
 
-                let d = 1;
-                let dh = (d as f32) * 0.5;
+                // let estimated_block_count = self.block_count / 2;
+                // let block_vertex_count = 24;
+                // let block_index_count = 36;
+                // mesh_data.reserve_vertices(block_vertex_count * estimated_block_count as usize);
+                // mesh_data.reserve_indices(block_index_count * estimated_block_count as usize);
 
-                for x in 0..CHUNK_BOUNDS.x / d {
-                    let cx = (x * d) as f32 + dh;
+                fn add_face_neg_x(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x - 0, y - 0, z + 1).as_vec3(), Vec3::NEG_X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x - 0, y - 0, z - 0).as_vec3(), Vec3::NEG_X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x - 0, y + 1,  z - 0).as_vec3(), Vec3::NEG_X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x - 0, y + 1,  z + 1).as_vec3(), Vec3::NEG_X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
+                fn add_face_pos_x(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x + 1, y - 0, z - 0).as_vec3(), Vec3::X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x + 1, y - 0, z + 1).as_vec3(), Vec3::X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x + 1, y + 1, z + 1).as_vec3(), Vec3::X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x + 1, y + 1, z - 0).as_vec3(), Vec3::X, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
+                fn add_face_neg_y(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x - 0, y - 0, z - 0).as_vec3(), Vec3::NEG_Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x - 0, y - 0, z + 1).as_vec3(), Vec3::NEG_Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x + 1, y - 0, z + 1).as_vec3(), Vec3::NEG_Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x + 1, y - 0, z - 0).as_vec3(), Vec3::NEG_Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
+                fn add_face_pos_y(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x + 1, y + 1, z + 1).as_vec3(), Vec3::Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x - 0, y + 1, z + 1).as_vec3(), Vec3::Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x - 0, y + 1, z - 0).as_vec3(), Vec3::Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x + 1, y + 1, z - 0).as_vec3(), Vec3::Y, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
+                fn add_face_neg_z(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x + 1, y + 1, z - 0).as_vec3(), Vec3::NEG_Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x - 0, y + 1, z - 0).as_vec3(), Vec3::NEG_Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x - 0, y - 0, z - 0).as_vec3(), Vec3::NEG_Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x + 1, y - 0, z - 0).as_vec3(), Vec3::NEG_Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
+                fn add_face_pos_z(mesh_data: &mut MeshData<BaseVertex>, x: i32, y: i32, z: i32) {
+                    let v00 = BaseVertex::new(IVec3::new(x - 0, y + 1, z + 1).as_vec3(), Vec3::Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v01 = BaseVertex::new(IVec3::new(x + 1, y + 1, z + 1).as_vec3(), Vec3::Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v11 = BaseVertex::new(IVec3::new(x + 1, y - 0, z + 1).as_vec3(), Vec3::Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    let v10 = BaseVertex::new(IVec3::new(x - 0, y - 0, z + 1).as_vec3(), Vec3::Z, U8Vec4::new(255, 255, 255, 255), U16Vec2::new(0, 0));
+                    mesh_data.create_quad(v00, v01, v11, v10);
+                }
 
-                    for y in 0..CHUNK_BOUNDS.y / d {
-                        let cy = (y * d) as f32 + dh;
+                let dim_x = CHUNK_BOUNDS.x as usize;
+                let dim_y = CHUNK_BOUNDS.y as usize;
+                let dim_z = CHUNK_BOUNDS.z as usize;
 
-                        for z in 0..CHUNK_BOUNDS.z / d {
-                            let cz = (z * d) as f32 + dh;
+                let y_stride = dim_x;
+                let z_stride = dim_x * dim_y;
 
-                            let index = calc_index_for_coord(UVec3::new(x * d, y * d, z * d), CHUNK_BOUNDS) as usize;
+                for z in 0..dim_z {
+                    let iz = z as i32;
+                    let z_index = z * z_stride;
+                    let z_index_z_n1 = (z - 1) * z_stride;
+                    let z_index_z_p1 = (z + 1) * z_stride;
 
-                            let flags = self.block_flags[index];
-                            let block = self.blocks[index];
-                            if block != 0 && flags & Self::BLOCK_FLAGS_IS_ENCLOSED != Self::BLOCK_FLAGS_IS_ENCLOSED {
-                                mesh_data.create_cuboid([cx, cy, cz], [dh, dh, dh]);
+
+                    for y in 0..dim_y {
+                        let iy = y as i32;
+                        let yz_index = (y * y_stride) + z_index;
+                        let yz_index_y_n1 = ((y - 1) * y_stride) + z_index;;
+                        let yz_index_y_p1 = ((y + 1) * y_stride) + z_index;
+                        let yz_index_z_n1 = (y * y_stride) + z_index_z_n1;
+                        let yz_index_z_p1 = (y * y_stride) + z_index_z_p1;
+
+                        for x in 0..dim_z {
+                            let ix = x as i32;
+
+                            let xyz_index = x + yz_index;
+
+                            let block = self.blocks[xyz_index];
+                            if block == 0 {
+                                continue;
+                            }
+
+                            let xyz_index_x_n1 = (x - 1) + yz_index;
+                            let xyz_index_x_p1 = (x + 1) + yz_index;
+                            let xyz_index_y_n1 = x + yz_index_y_n1;
+                            let xyz_index_y_p1 = x + yz_index_y_p1;
+                            let xyz_index_z_n1 = x + yz_index_z_n1;
+                            let xyz_index_z_p1 = x + yz_index_z_p1;
+
+                            // let xyz_index_x_p1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(1, 0, 0), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+                            // let xyz_index_x_n1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(-1, 0, 0), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+                            // let xyz_index_y_p1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, 1, 0), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+                            // let xyz_index_y_n1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, -1, 0), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+                            // let xyz_index_z_p1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, 0, 1), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+                            // let xyz_index_z_n1 = calc_index_for_coord_offset(IVec3::new(x as i32, y as i32, z as i32), IVec3::new(0, 0, -1), CHUNK_BOUNDS).map_or(0, |val| val) as usize;
+
+                            let block_x_p1 = if x < (dim_x - 1) {
+                                assert_eq!(xyz_index_x_p1, calc_index_for_coord(UVec3::new((x + 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_x_p1]
+                            } else { 0 };
+                            let block_x_n1 = if x > 0 {
+                                assert_eq!(xyz_index_x_n1, calc_index_for_coord(UVec3::new((x - 1) as u32, y as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_x_n1]
+                            } else { 0 };
+                            let block_y_p1 = if y < (dim_y - 1) {
+                                assert_eq!(xyz_index_y_p1, calc_index_for_coord(UVec3::new(x as u32, (y + 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_y_p1]
+                            } else { 0 };
+                            let block_y_n1 = if y > 0 {
+                                assert_eq!(xyz_index_y_n1, calc_index_for_coord(UVec3::new(x as u32, (y - 1) as u32, z as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_y_n1]
+                            } else { 0 };
+                            let block_z_p1 = if z < (dim_z - 1) {
+                                assert_eq!(xyz_index_z_p1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z + 1) as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_z_p1]
+                            } else { 0 };
+                            let block_z_n1 = if z > 0 {
+                                assert_eq!(xyz_index_z_n1, calc_index_for_coord(UVec3::new(x as u32, y as u32, (z - 1) as u32), CHUNK_BOUNDS) as usize);
+                                self.blocks[xyz_index_z_n1]
+                            } else { 0 };
+
+                            let has_all_neighbours =
+                                block_x_n1 != 0 && block_x_p1 != 0 &&
+                                    block_y_n1 != 0 && block_y_p1 != 0 &&
+                                    block_z_n1 != 0 && block_z_p1 != 0;
+
+                            if has_all_neighbours {
+                                continue;
+                            }
+
+                            if block_x_n1 == 0 {
+                                add_face_neg_x(&mut mesh_data_neg_x, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::NegX, center, [half_size[1], half_size[2]], half_size[0]);
+                            }
+                            if block_x_p1 == 0 {
+                                add_face_pos_x(&mut mesh_data_pos_x, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::PosX, center, [half_size[1], half_size[2]], half_size[0]);
+                            }
+                            if block_y_n1 == 0 {
+                                add_face_neg_y(&mut mesh_data_neg_y, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::NegY, center, [half_size[0], half_size[2]], half_size[1]);
+                            }
+                            if block_y_p1 == 0 {
+                                add_face_pos_y(&mut mesh_data_pos_y, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::PosY, center, [half_size[0], half_size[2]], half_size[1]);
+                            }
+                            if block_z_n1 == 0 {
+                                add_face_neg_z(&mut mesh_data_neg_z, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::NegZ, center, [half_size[0], half_size[1]], half_size[2]);
+                            }
+                            if block_z_p1 == 0 {
+                                add_face_pos_z(&mut mesh_data_pos_z, ix, iy, iz);
+                                // mesh_data.create_box_face(AxisDirection::PosZ, center, [half_size[0], half_size[1]], half_size[2]);
                             }
                         }
                     }
                 }
 
-                if mesh_data.vertices.len() > 0 {
-                    self.updated_mesh_data = Some(mesh_data);
-                } else {
-                    self.updated_mesh_data = None;
+                // assert_eq!(self.block_count, test_block_count);
+
+                for i in 0..6 {
+                    self.updated_mesh_data[i] = None;
                 }
+                if !mesh_data_neg_x.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::NegX.index() as usize] = Some(mesh_data_neg_x)
+                }
+                if !mesh_data_pos_x.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::PosX.index() as usize] = Some(mesh_data_pos_x)
+                }
+                if !mesh_data_neg_y.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::NegY.index() as usize] = Some(mesh_data_neg_y)
+                }
+                if !mesh_data_pos_y.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::PosY.index() as usize] = Some(mesh_data_pos_y)
+                }
+                if !mesh_data_neg_z.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::NegZ.index() as usize] = Some(mesh_data_neg_z)
+                }
+                if !mesh_data_pos_z.vertices.is_empty() {
+                    self.updated_mesh_data[AxisDirection::PosZ.index() as usize] = Some(mesh_data_pos_z)
+                }
+
+                // let has_vertices =
+                //     !mesh_data_neg_x.vertices.is_empty() || !mesh_data_pos_x.vertices.is_empty() ||
+                //     !mesh_data_neg_y.vertices.is_empty() || !mesh_data_pos_y.vertices.is_empty() ||
+                //     !mesh_data_neg_z.vertices.is_empty() || !mesh_data_pos_z.vertices.is_empty();
+                //
+                // if has_vertices {
+                //     self.updated_mesh_data = Some(mesh_data);
+                // } else {
+                //     self.updated_mesh_data = None;
+                // }
             }
 
             Ok(())
         }
 
         pub fn create_gpu_mesh(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<bool> {
-            let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
-            let mesh_data = self.updated_mesh_data.take();
+            // let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
+            //
+            // if staging_size == 0 {
+            //     return Ok(false)
+            // }
 
-            if staging_size == 0 {
-                return Ok(false)
+            let mut changed = false;
+
+            for i in 0..6 {
+                let mesh_data = self.updated_mesh_data[i].take();
+
+                if let Some(mesh_data) = mesh_data {
+                    let allocator = engine.graphics.memory_allocator();
+
+                    let staging_size = mesh_data.get_required_staging_buffer_size();
+                    let staging_buffer = util::chop_buffer_at(staging_buffer, staging_size).unwrap();
+
+                    let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
+                    self.mesh[i] = Some(mesh);
+
+                    changed = true;
+                }
             }
 
-            if let Some(mesh_data) = mesh_data {
-                let allocator = engine.graphics.memory_allocator();
 
-                let staging_buffer = util::chop_buffer_at(staging_buffer, staging_size).unwrap();
-
-                let mesh = Arc::new(mesh_data.build_mesh_staged(allocator, cmd_buf, &staging_buffer)?);
-                self.mesh = Some(mesh);
-
-                return Ok(true)
-            }
-
-            Ok(false)
+            Ok(changed)
         }
 
         fn get_staging_buffer_size(&self) -> DeviceSize {
-            if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
-                mesh_data.get_required_staging_buffer_size()
-            } else {
-                0
+            let mut size = 0;
+            for mesh_data in self.updated_mesh_data.iter() {
+                if let Some(mesh_data) = mesh_data {
+                    size += mesh_data.get_required_staging_buffer_size();
+                }
             }
+            size
+
+            // if let Some(mesh_data) = self.updated_mesh_data.as_ref() {
+            //     mesh_data.get_required_staging_buffer_size()
+            // } else {
+            //     0
+            // }
         }
 
         fn load_edits(&mut self, block_edits: HashMap<UVec3, u32>) {

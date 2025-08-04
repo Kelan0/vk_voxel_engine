@@ -29,6 +29,41 @@ pub enum AxisDirection {
     PosZ,
 }
 
+impl AxisDirection {
+    pub fn from_index(index: u32) -> Option<AxisDirection> {
+        match index {
+            0 => Some(AxisDirection::NegX),
+            1 => Some(AxisDirection::PosX),
+            2 => Some(AxisDirection::NegY),
+            3 => Some(AxisDirection::PosY),
+            4 => Some(AxisDirection::NegZ),
+            5 => Some(AxisDirection::PosZ),
+            _ => None
+        }
+    }
+    pub fn index(&self) -> u32 {
+        match *self {
+            AxisDirection::NegX => 0,
+            AxisDirection::PosX => 1,
+            AxisDirection::NegY => 2,
+            AxisDirection::PosY => 3,
+            AxisDirection::NegZ => 4,
+            AxisDirection::PosZ => 5,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match *self {
+            AxisDirection::NegX => "NegX",
+            AxisDirection::PosX => "PosX",
+            AxisDirection::NegY => "NegY",
+            AxisDirection::PosY => "PosY",
+            AxisDirection::NegZ => "NegZ",
+            AxisDirection::PosZ => "PosZ",
+        }
+    }
+}
+
 
 impl <V: Vertex> MeshData<V> {
 
@@ -37,6 +72,14 @@ impl <V: Vertex> MeshData<V> {
             primitive_type,
             ..Default::default()
         }
+    }
+
+    pub fn reserve_vertices(&mut self, additional_vertex_cound: usize) {
+        self.vertices.reserve(additional_vertex_cound)
+    }
+
+    pub fn reserve_indices(&mut self, additional_index_cound: usize) {
+        self.indices.reserve(additional_index_cound)
     }
 
     pub fn vertex_count(&self) -> u32 {
