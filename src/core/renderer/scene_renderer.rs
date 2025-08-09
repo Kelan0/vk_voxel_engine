@@ -1,5 +1,6 @@
 use crate::application::Ticker;
-use crate::core::{set_vulkan_debug_name, Camera, CameraDataUBO, FrameCompleteEvent, CommandBuffer, CommandBufferImpl, Engine, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture, RenderCamera};
+use crate::core::{set_vulkan_debug_name, util, CommandBuffer, CommandBufferImpl, Engine, FrameCompleteEvent, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderCamera, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::{function_name, profile_scope_fn};
 use anyhow::anyhow;
 use anyhow::Result;
 use bevy_ecs::component::Component;
@@ -35,7 +36,6 @@ use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineCreateFlags};
 use vulkano::render_pass::Subpass;
 use vulkano::DeviceSize;
-use crate::{function_name, profile_scope_fn};
 
 #[derive(BufferContents, Vertex, Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -178,7 +178,6 @@ pub struct SceneRenderer {
     wire_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     debug_lines_graphics_pipeline: Option<Arc<GraphicsPipeline>>,
     resources: Vec<FrameResource>,
-    wireframe_mode: WireframeMode,
     // render_camera: RenderCamera,
     // camera: Camera,
     // meshes: Vec<Mesh<BaseVertex>>, // temporary
@@ -219,8 +218,10 @@ struct FrameResource {
     descriptor_set_camera: Option<Arc<DescriptorSet>>,
     descriptor_set_world: Option<Arc<DescriptorSet>>,
     descriptor_set_materials: Option<Arc<DescriptorSet>>,
+
     descriptor_writes_world: Vec<WriteDescriptorSet>,
     descriptor_writes_materials: Vec<WriteDescriptorSet>,
+
     recreate_descriptor_sets: bool,
     static_scene_changed: bool,
     textures_changed: bool,
@@ -233,13 +234,6 @@ struct FrameResource {
     descriptor_writes_debug_world: Vec<WriteDescriptorSet>,
 
     active_resources: Vec<Arc<dyn Any>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WireframeMode {
-    Solid,
-    Wire,
-    Both,
 }
 
 #[derive(Debug, Clone)]
@@ -295,7 +289,6 @@ impl SceneRenderer {
             wire_graphics_pipeline: None,
             debug_lines_graphics_pipeline: None,
             resources: vec![],
-            wireframe_mode: WireframeMode::Solid,
             // render_camera: RenderCamera::new(graphics),
             // camera: Camera::new(),
 
@@ -354,8 +347,10 @@ impl SceneRenderer {
                 descriptor_set_camera: None,
                 descriptor_set_world: None,
                 descriptor_set_materials: None,
+
                 descriptor_writes_world: vec![],
                 descriptor_writes_materials: vec![],
+                
                 recreate_descriptor_sets: true,
                 static_scene_changed: false,
                 textures_changed: false,
@@ -375,9 +370,7 @@ impl SceneRenderer {
     }
 
     pub fn pre_render(&mut self, ticker: &mut Ticker, engine: &mut Engine, _cmd_buf: &mut CommandBuffer) -> Result<()> {
-
         profile_scope_fn!(&engine.frame_profiler);
-
 
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
             let mut query = engine.scene.ecs.query::<(&mut RenderComponent<BaseVertex>, &Transform)>();
@@ -462,12 +455,12 @@ impl SceneRenderer {
         cmd_buf.set_viewport(0, [viewport].into_iter().collect())?;
         cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone(), descriptor_set_materials.clone()])?;
 
-        if self.wireframe_mode == WireframeMode::Solid || self.wireframe_mode == WireframeMode::Both {
+        if engine.wireframe_mode().is_solid() {
             let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(solid_graphics_pipeline.clone())?;
             self.draw_scene(cmd_buf, &mut engine.scene, engine.graphics.current_frame_index())?;
         }
-        if self.wireframe_mode == WireframeMode::Wire || self.wireframe_mode == WireframeMode::Both {
+        if engine.wireframe_mode().is_wire() {
             let wire_graphics_pipeline = self.wire_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(wire_graphics_pipeline.clone())?;
             self.draw_scene(cmd_buf, &mut engine.scene, engine.graphics.current_frame_index())?;
@@ -487,7 +480,7 @@ impl SceneRenderer {
             return Ok(())
         }
 
-        self.max_debug_object_count = Self::grow_capacity(self.max_debug_object_count, debug_object_count as u32, 1.5);
+        self.max_debug_object_count = util::grow_capacity(self.max_debug_object_count, debug_object_count as u32, 1.5);
 
         // debug!("{} debug meshes", debug_object_count);
 
@@ -734,7 +727,7 @@ impl SceneRenderer {
 
         if num_objects > self.max_object_count {
             let prev_max_objects = self.max_object_count;
-            self.max_object_count = Self::grow_capacity(self.max_object_count, num_objects, growth_rate);
+            self.max_object_count = util::grow_capacity(self.max_object_count, num_objects, growth_rate);
             debug!("SceneRenderer - Growing ObjectData GPU buffers. Previous max objects: {prev_max_objects}, new max objects: {}", self.max_object_count);
         }
 
@@ -742,17 +735,9 @@ impl SceneRenderer {
 
         if num_materials > self.max_material_count {
             let prev_max_materials = self.max_material_count;
-            self.max_material_count = Self::grow_capacity(self.max_material_count, num_objects, growth_rate);
+            self.max_material_count = util::grow_capacity(self.max_material_count, num_objects, growth_rate);
             debug!("SceneRenderer - Growing Material GPU buffers. Previous max materials: {prev_max_materials}, new max materials: {}", self.max_material_count);
         }
-    }
-
-    fn grow_capacity(mut capacity: u32, required_capacity: u32, growth_rate: f64) -> u32 {
-        capacity = u32::max(1, capacity);
-        while capacity < required_capacity {
-            capacity = f64::ceil(capacity as f64 * growth_rate) as u32
-        }
-        capacity
     }
 
     fn update_object_date_transform(transform: &Transform, object_data_buffer: &mut ObjectDataUBO) {
@@ -980,10 +965,12 @@ impl SceneRenderer {
         file.read_to_string(&mut shader_source)?;
 
         let mut options = CompileOptions::new()?;
+        options.add_macro_definition("WORLD_SCALE", Some(Transform::WORLD_SCALE.to_string().as_str()));
         options.add_macro_definition("VERTEX_SHADER_MODULE", None);
         let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "world_solid.glsl::vert", "main", ShaderKind::Vertex, Some(&options))?;
 
         let mut options = CompileOptions::new()?;
+        options.add_macro_definition("WORLD_SCALE", Some(Transform::WORLD_SCALE.to_string().as_str()));
         options.add_macro_definition("FRAGMENT_SHADER_MODULE", None);
         let fs_solid = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "world_solid.glsl::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
 
@@ -1055,10 +1042,12 @@ impl SceneRenderer {
         file.read_to_string(&mut shader_source)?;
 
         let mut options = CompileOptions::new()?;
+        options.add_macro_definition("WORLD_SCALE", Some(Transform::WORLD_SCALE.to_string().as_str()));
         options.add_macro_definition("VERTEX_SHADER_MODULE", None);
         let vs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "debug.glsl::vert", "main", ShaderKind::Vertex, Some(&options))?;
 
         let mut options = CompileOptions::new()?;
+        options.add_macro_definition("WORLD_SCALE", Some(Transform::WORLD_SCALE.to_string().as_str()));
         options.add_macro_definition("FRAGMENT_SHADER_MODULE", None);
         let fs = engine.graphics.load_shader_module_from_source(shader_source.as_str(), "debug.glsl::frag(solid)", "main", ShaderKind::Fragment, Some(&options))?;
 
@@ -1420,14 +1409,6 @@ impl SceneRenderer {
     // pub fn add_mesh(&mut self, mesh: Mesh<BaseVertex>) {
     //     self.meshes.push(mesh);
     // }
-
-    pub fn set_wireframe_mode(&mut self, wireframe_mode: WireframeMode) {
-        self.wireframe_mode = wireframe_mode;
-    }
-
-    pub fn wireframe_mode(&self) -> WireframeMode {
-        self.wireframe_mode
-    }
 
     pub fn debug_render_context(&mut self) -> &mut DebugRenderContext {
         &mut self.debug_render_context

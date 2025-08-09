@@ -76,3 +76,11 @@ pub fn f32_to_u16_norm<const L: usize>(coord: [f32; L]) -> [u16; L] {
     const M: f32 = u16::MAX as f32;
     coord.map(|x| (x * M).round() as u16)
 }
+
+pub fn grow_capacity(mut capacity: u32, required_capacity: u32, growth_rate: f64) -> u32 {
+    capacity = u32::max(1, capacity);
+    while capacity < required_capacity {
+        capacity = f64::ceil(capacity as f64 * growth_rate) as u32
+    }
+    capacity
+}

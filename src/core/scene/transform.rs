@@ -20,7 +20,7 @@ impl Default for Transform {
 
 impl Transform {
 
-    const SCALE: f32 = 1.0 / 32.0;
+    pub const WORLD_SCALE: f64 = 1.0;
 
     pub fn new() -> Self {
         // Transform { affine }
@@ -188,7 +188,7 @@ impl Transform {
             self.affine.matrix3.x_axis.extend(0.0),
             self.affine.matrix3.y_axis.extend(0.0),
             self.affine.matrix3.z_axis.extend(0.0),
-            (self.affine.translation * Self::SCALE).extend(1.0),
+            (self.affine.translation * Self::WORLD_SCALE as f32).extend(1.0),
         )
     }
 

@@ -31,6 +31,29 @@ pub struct Engine {
     user_app: Option<Box<dyn App>>,
     event_window_resized: Option<ReaderId<WindowResizedEvent>>,
     next_resource_id: u64,
+    wireframe_mode: WireframeMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WireframeMode {
+    Solid,
+    Wire,
+    Both,
+}
+
+impl WireframeMode {
+    pub fn is_solid(&self) -> bool {
+        match *self {
+            WireframeMode::Solid | WireframeMode::Both => true,
+            _ => false
+        }
+    }
+    pub fn is_wire(&self) -> bool {
+        match *self {
+            WireframeMode::Wire | WireframeMode::Both => true,
+            _ => false
+        }
+    }
 }
 
 unsafe impl Send for Engine {}
@@ -85,6 +108,7 @@ impl Engine {
             user_app,
             event_window_resized: None,
             next_resource_id: 0,
+            wireframe_mode: WireframeMode::Solid,
         };
 
         Ok(Box::new(app))
@@ -164,6 +188,14 @@ impl Engine {
 
     pub fn user_app_mut(&mut self) -> &mut Box<dyn App> {
         self.user_app.as_mut().unwrap()
+    }
+
+    pub fn wireframe_mode(&self) -> WireframeMode {
+        self.wireframe_mode
+    }
+
+    pub fn set_wireframe_mode(&mut self, wireframe_mode: WireframeMode) {
+        self.wireframe_mode = wireframe_mode;
     }
 
     fn register_events(&mut self) -> Result<()> {

@@ -1,5 +1,5 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
-use crate::core::{GraphicsManager, RecreateSwapchainEvent};
+use crate::core::{GraphicsManager, RecreateSwapchainEvent, Transform};
 use anyhow::{anyhow, Result};
 use ash::vk::{DeviceSize, Handle};
 use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot, Mat4};
@@ -73,7 +73,7 @@ impl Camera {
             }
         }
 
-        self.view_matrix = DMat4::from_rotation_translation(self.orientation, self.position / 32.0);
+        self.view_matrix = DMat4::from_rotation_translation(self.orientation, self.position * Transform::WORLD_SCALE as f64);
         self.view_matrix = self.view_matrix.inverse();
         self.view_projection_matrix = self.projection_matrix.as_dmat4() * self.view_matrix;
     }

@@ -1,7 +1,7 @@
-use crate::core::{set_vulkan_debug_name, util, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
+use crate::core::{set_vulkan_debug_name, util, AxisAlignedBoundingBox, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
 use anyhow::Result;
 use ash::vk::DeviceSize;
-use glam::{Affine3A, Mat4, Vec3};
+use glam::{Affine3A, DVec3, IVec3, Mat4, Vec3};
 use std::fmt::{Debug, Formatter};
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -52,6 +52,39 @@ impl AxisDirection {
         }
     }
 
+    pub fn vec(&self) -> Vec3 {
+        match *self {
+            AxisDirection::NegX => Vec3::NEG_X,
+            AxisDirection::PosX => Vec3::X,
+            AxisDirection::NegY => Vec3::NEG_Y,
+            AxisDirection::PosY => Vec3::Y,
+            AxisDirection::NegZ => Vec3::NEG_Z,
+            AxisDirection::PosZ => Vec3::Z,
+        }
+    }
+
+    pub fn dvec(&self) -> DVec3 {
+        match *self {
+            AxisDirection::NegX => DVec3::NEG_X,
+            AxisDirection::PosX => DVec3::X,
+            AxisDirection::NegY => DVec3::NEG_Y,
+            AxisDirection::PosY => DVec3::Y,
+            AxisDirection::NegZ => DVec3::NEG_Z,
+            AxisDirection::PosZ => DVec3::Z,
+        }
+    }
+
+    pub fn ivec(&self) -> IVec3 {
+        match *self {
+            AxisDirection::NegX => IVec3::NEG_X,
+            AxisDirection::PosX => IVec3::X,
+            AxisDirection::NegY => IVec3::NEG_Y,
+            AxisDirection::PosY => IVec3::Y,
+            AxisDirection::NegZ => IVec3::NEG_Z,
+            AxisDirection::PosZ => IVec3::Z,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match *self {
             AxisDirection::NegX => "NegX",
@@ -88,6 +121,37 @@ impl <V: Vertex> MeshData<V> {
 
     pub fn index_count(&self) -> u32 {
         self.indices.len() as u32
+    }
+
+    pub fn calculate_aabb(&self) -> AxisAlignedBoundingBox
+    where V: VertexHasPosition<f32> {
+        let mut pos_min = [f32::MAX, f32::MAX, f32::MAX];
+        let mut pos_max = [f32::MIN, f32::MIN, f32::MIN];
+
+        for vertex in &self.vertices {
+            let p = vertex.position();
+
+            pos_min[0] = f32::min(pos_min[0], p[0]);
+            pos_min[1] = f32::min(pos_min[1], p[1]);
+            pos_min[2] = f32::min(pos_min[2], p[2]);
+
+            pos_max[0] = f32::max(pos_max[0], p[0]);
+            pos_max[1] = f32::max(pos_max[1], p[1]);
+            pos_max[2] = f32::max(pos_max[2], p[2]);
+        }
+
+        AxisAlignedBoundingBox::new(
+            DVec3::new(
+                pos_min[0] as f64,
+                pos_min[1] as f64,
+                pos_min[2] as f64
+            ),
+            DVec3::new(
+                pos_max[0] as f64,
+                pos_max[1] as f64,
+                pos_max[2] as f64
+            )
+        )
     }
 
     pub fn add_vertex(&mut self, vertex: V) -> u32 {

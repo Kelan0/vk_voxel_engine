@@ -36,6 +36,9 @@ struct Material {
 };
 
 
+#ifndef WORLD_SCALE
+#define WORLD_SCALE 1.0
+#endif
 
 #ifdef VERTEX_SHADER_MODULE
 layout(std140, set = 0, binding = 0) uniform UBO1 {
@@ -76,7 +79,7 @@ void main() {
     fs_texture = vs_texture;
     fs_materialIndex = materialIndex;
 
-    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position / 32.0, 1.0);
+    gl_Position = camera.viewProjectionMatrix * modelMatrix * vec4(vs_position * WORLD_SCALE, 1.0);
 }
 #endif
 

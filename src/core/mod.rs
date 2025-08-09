@@ -1,5 +1,7 @@
 
 #![allow(dead_code)]
+#[allow(refining_impl_trait)]
+
 mod engine;
 mod renderer;
 mod event;

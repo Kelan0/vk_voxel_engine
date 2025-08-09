@@ -1,7 +1,8 @@
 mod scene_manager;
 mod transform;
 mod bounds;
-mod world;
+#[allow(refining_impl_trait)]
+pub(crate) mod world;
 
 pub use scene_manager::*;
 pub use transform::*;

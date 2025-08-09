@@ -1,7 +1,8 @@
 use crate::core::{DebugRenderContext, MeshPrimitiveType, Transform};
 use anyhow::Result;
-use glam::{DVec3, U8Vec4};
+use glam::{DVec3, U8Vec4, Vec3};
 
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct AxisAlignedBoundingBox {
     pub min_coord: DVec3,
     pub max_coord: DVec3
@@ -36,6 +37,22 @@ impl BoundingVolume for AxisAlignedBoundingBox {
     fn max_coord(&self) -> DVec3 {
         self.max_coord
     }
+
+    fn closest_point(&self, pos: DVec3) -> DVec3 {
+        DVec3::new(
+            pos.x.clamp(self.min_coord.x, self.max_coord.x),
+            pos.y.clamp(self.min_coord.y, self.max_coord.y),
+            pos.z.clamp(self.min_coord.z, self.max_coord.z)
+        )
+    }
+    
+    #[allow(refining_impl_trait)]
+    fn translate(&self, translation: DVec3) -> AxisAlignedBoundingBox {
+        AxisAlignedBoundingBox {
+            min_coord: self.min_coord + translation,
+            max_coord: self.max_coord + translation,
+        }
+    }
 }
 
 impl BoundingVolumeDebugDraw for AxisAlignedBoundingBox {
@@ -59,6 +76,10 @@ pub trait BoundingVolume {
     fn min_coord(&self) -> DVec3;
 
     fn max_coord(&self) -> DVec3;
+
+    fn closest_point(&self, pos: DVec3) -> DVec3;
+
+    fn translate(&self, translation: DVec3) -> impl BoundingVolume;
 }
 
 pub trait BoundingVolumeDebugDraw {

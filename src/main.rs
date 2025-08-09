@@ -167,7 +167,7 @@ impl App for TestGame {
         // engine.scene_renderer.add_mesh(mesh);
 
         let camera = &mut engine.render_camera_mut().camera;
-        camera.set_perspective(70.0, 4.0 / 3.0, 0.1, 64.0);
+        camera.set_perspective(70.0, 4.0 / 3.0, 0.3 * Transform::WORLD_SCALE as f32, 1024.0 * Transform::WORLD_SCALE as f32);
         camera.set_position(DVec3::new(1.0, 0.0, -3.0));
 
         let num_x = 10;
@@ -278,11 +278,9 @@ impl App for TestGame {
             debug!("FIRST FRAME!")
         }
 
-        let window = &mut engine.window;
-
-        if window.input().key_pressed(Key::F1) {
-            engine.scene_renderer.set_wireframe_mode(
-                match engine.scene_renderer.wireframe_mode() {
+        if engine.window.input().key_pressed(Key::F1) {
+            engine.set_wireframe_mode(
+                match engine.wireframe_mode() {
                     WireframeMode::Solid => WireframeMode::Both,
                     WireframeMode::Both => WireframeMode::Wire,
                     WireframeMode::Wire => WireframeMode::Solid,
@@ -291,19 +289,19 @@ impl App for TestGame {
 
             debug!(
                 "Changed render mode: {:?}",
-                engine.scene_renderer.wireframe_mode()
+                engine.wireframe_mode()
             );
         }
 
-        if window.input().key_pressed(Key::Escape) {
-            window.set_mouse_grabbed(!window.is_mouse_grabbed())
+        if engine.window.input().key_pressed(Key::Escape) {
+            engine.window.set_mouse_grabbed(!engine.window.is_mouse_grabbed())
         }
 
-        if window.is_mouse_grabbed() {
+        if engine.window.is_mouse_grabbed() {
 
             // let camera = engine.scene_renderer.camera_mut();
 
-            let mouse_motion = window.input().relative_mouse_pos();
+            let mouse_motion = engine.window.input().relative_mouse_pos();
             let delta_pitch = (mouse_motion.y * 0.04) as f64;
             let delta_yaw = (mouse_motion.x * 0.04) as f64;
             self.camera_pitch = f64::clamp(self.camera_pitch + delta_pitch, -90.0, 90.0);
@@ -315,7 +313,7 @@ impl App for TestGame {
                 self.camera_yaw += 360.0;
             }
 
-            let scroll = window.input().mouse_scroll_amount().y;
+            let scroll = engine.window.input().mouse_scroll_amount().y;
 
             if scroll > 0.0 {
                 self.move_speed *= 1.5;
@@ -327,7 +325,7 @@ impl App for TestGame {
 
             let camera = &mut engine.render_camera.camera;
 
-            if window.input().mouse_pressed(MouseButton::Left) {
+            if engine.window.input().mouse_pressed(MouseButton::Left) {
                 self.add_test_entity(&mut engine.scene, (camera.position() + camera.z_axis() * 2.0).as_vec3());
             }
 
@@ -338,22 +336,22 @@ impl App for TestGame {
             camera.set_rotation_euler(self.camera_pitch, self.camera_yaw, 0.0);
 
             let mut move_dir = DVec3::ZERO;
-            if window.input().key_down(Key::W) {
+            if engine.window.input().key_down(Key::W) {
                 move_dir += forward_axis;
             }
-            if window.input().key_down(Key::S) {
+            if engine.window.input().key_down(Key::S) {
                 move_dir -= forward_axis;
             }
-            if window.input().key_down(Key::A) {
+            if engine.window.input().key_down(Key::A) {
                 move_dir -= right_axis;
             }
-            if window.input().key_down(Key::D) {
+            if engine.window.input().key_down(Key::D) {
                 move_dir += right_axis;
             }
-            if window.input().key_down(Key::Space) {
+            if engine.window.input().key_down(Key::Space) {
                 move_dir += up_axis;
             }
-            if window.input().key_down(Key::LShift) {
+            if engine.window.input().key_down(Key::LShift) {
                 move_dir -= up_axis;
             }
 
