@@ -1,4 +1,4 @@
-use crate::core::{set_vulkan_debug_name, util, AxisAlignedBoundingBox, CommandBuffer, GraphicsManager, Mesh, MeshConfiguration, MeshPrimitiveType, Transform};
+use crate::core::{set_vulkan_debug_name, util, AxisAlignedBoundingBox, CommandBuffer, GraphicsManager, Mesh, MeshBufferOption, MeshConfiguration, MeshPrimitiveType, Transform};
 use anyhow::Result;
 use ash::vk::DeviceSize;
 use glam::{Affine3A, DVec3, IVec3, Mat4, Vec3};
@@ -9,6 +9,7 @@ use vulkano::buffer::Subbuffer;
 use vulkano::memory::allocator::{align_up, MemoryAllocator};
 use vulkano::memory::DeviceAlignment;
 use vulkano::pipeline::graphics::vertex_input::Vertex;
+use crate::core::MeshBufferOption::AllocateNew;
 
 #[derive(Clone, PartialEq)]
 pub struct MeshData<V: Vertex> {
@@ -16,7 +17,8 @@ pub struct MeshData<V: Vertex> {
     pub indices: Vec<u32>,
     primitive_type: MeshPrimitiveType,
     transform_stack: Vec<Transform>,
-    current_transform: Transform
+    current_transform: Transform,
+    has_indices: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,11 +100,32 @@ impl AxisDirection {
 }
 
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct MeshDataConfig {
+    pub primitive_type: MeshPrimitiveType,
+    pub has_indices: bool
+}
+
+impl MeshDataConfig {
+    pub fn new(primitive_type: MeshPrimitiveType) -> Self {
+        MeshDataConfig {
+            primitive_type,
+            has_indices: true,
+        }
+    }
+
+    pub fn without_indices(mut self) -> Self {
+        self.has_indices = false;
+        self
+    }
+}
+
 impl <V: Vertex> MeshData<V> {
 
-    pub fn new(primitive_type: MeshPrimitiveType) -> Self {
+    pub fn new(config: MeshDataConfig) -> Self {
         MeshData{
-            primitive_type,
+            primitive_type: config.primitive_type,
+            has_indices: config.has_indices,
             ..Default::default()
         }
     }
@@ -121,6 +144,10 @@ impl <V: Vertex> MeshData<V> {
 
     pub fn index_count(&self) -> u32 {
         self.indices.len() as u32
+    }
+
+    pub fn primitive_type(&self) -> MeshPrimitiveType {
+        self.primitive_type
     }
 
     pub fn calculate_aabb(&self) -> AxisAlignedBoundingBox
@@ -198,13 +225,26 @@ impl <V: Vertex> MeshData<V> {
     }
     
     pub fn create_quad(&mut self, v00: V, v01: V, v11: V, v10: V) -> (u32, u32) {
-        let vert_idx = self.vertices.len() as u32;
-        let i00 = self.add_vertex(v00);
-        let i01 = self.add_vertex(v01);
-        let i11 = self.add_vertex(v11);
-        let i10 = self.add_vertex(v10);
-        let index_idx = self.add_quad(i00, i01, i11, i10);
-        (vert_idx, index_idx)
+        if self.has_indices {
+
+            let vert_idx = self.vertices.len() as u32;
+            let i00 = self.add_vertex(v00);
+            let i01 = self.add_vertex(v01);
+            let i11 = self.add_vertex(v11);
+            let i10 = self.add_vertex(v10);
+            let index_idx = self.add_quad(i00, i01, i11, i10);
+            (vert_idx, index_idx)
+
+        } else {
+
+            let vert_idx = self.vertices.len() as u32;
+            let i00 = self.add_vertex(v00);
+            let i01 = self.add_vertex(v01);
+            let i11 = self.add_vertex(v11);
+            let i10 = self.add_vertex(v10);
+            let index_idx = self.add_quad(i00, i01, i11, i10);
+            (vert_idx, index_idx)
+        }
     }
 
     fn create_triangle_primitive(&mut self, i0: u32, i1: u32, i2: u32) -> u32 {
@@ -262,6 +302,8 @@ impl <V: Vertex> MeshData<V> {
             primitive_type: self.primitive_type,
             vertices: self.vertices,
             indices: Some(self.indices),
+            vertex_buffer: AllocateNew,
+            index_buffer: AllocateNew,
         })?;
         
         Ok(mesh)
@@ -273,6 +315,8 @@ impl <V: Vertex> MeshData<V> {
             primitive_type: self.primitive_type,
             vertices: self.vertices.to_vec(),
             indices: Some(self.indices.to_vec()),
+            vertex_buffer: AllocateNew,
+            index_buffer: AllocateNew,
         })?;
 
         Ok(mesh)
@@ -283,6 +327,8 @@ impl <V: Vertex> MeshData<V> {
             primitive_type: self.primitive_type,
             vertices: self.vertices,
             indices: Some(self.indices),
+            vertex_buffer: AllocateNew,
+            index_buffer: AllocateNew,
         })?;
         
         Ok(mesh)
@@ -294,9 +340,40 @@ impl <V: Vertex> MeshData<V> {
             primitive_type: self.primitive_type,
             vertices: self.vertices.to_vec(),
             indices: Some(self.indices.to_vec()),
+            vertex_buffer: AllocateNew,
+            index_buffer: AllocateNew,
         })?;
 
         Ok(mesh)
+    }
+
+    pub fn upload_vertex_data(&self, buffer: &Subbuffer<[u8]>) -> Result<()> {
+        debug_assert!(buffer.size() >= self.get_required_vertex_buffer_size());
+
+        GraphicsManager::upload_buffer_data_bytes_iter_ref(&buffer, &self.vertices)?;
+        Ok(())
+    }
+
+    pub fn upload_index_data(&self, buffer: &Subbuffer<[u8]>) -> Result<bool> {
+        if self.indices.is_empty() {
+            return Ok(false);
+        }
+
+        debug_assert!(buffer.size() >= self.get_required_index_buffer_size());
+        GraphicsManager::upload_buffer_data_bytes_iter_ref(&buffer, &self.indices)?;
+        Ok(true)
+    }
+
+    pub fn upload_mesh_data(&self, buffer: &Subbuffer<[u8]>) -> Result<()>{
+        self.upload_vertex_data(buffer)?;
+
+        if !self.indices.is_empty() {
+            let offset = self.get_required_vertex_buffer_size();
+            let buffer = buffer.clone().slice(offset..);
+            self.upload_index_data(&buffer)?;
+        }
+
+        Ok(())
     }
     
     pub fn get_required_vertex_buffer_size(&self) -> DeviceSize {
@@ -673,6 +750,7 @@ impl <V: Vertex> Default for MeshData<V> {
             vertices: vec![],
             indices: vec![],
             current_transform: Transform::default(),
+            has_indices: true,
         }
     }
 }

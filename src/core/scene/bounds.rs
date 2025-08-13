@@ -87,7 +87,7 @@ pub trait BoundingVolumeDebugDraw {
 }
 
 pub mod debug_mesh {
-    use crate::core::{util, BaseVertex, GraphicsManager, Mesh, MeshData, MeshPrimitiveType};
+    use crate::core::{util, BaseVertex, GraphicsManager, Mesh, MeshData, MeshDataConfig, MeshPrimitiveType};
     use anyhow::Result;
     use lazy_static::lazy_static;
     use std::sync::{Arc, Mutex};
@@ -102,7 +102,7 @@ pub mod debug_mesh {
         let allocator = graphics.memory_allocator();
         let mut cmd_buf = graphics.begin_transfer_commands()?;
 
-        let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::LineList);
+        let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
         mesh_data.create_cuboid_textured([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], util::f32_to_u16_norm([0.0, 0.0]), util::f32_to_u16_norm([1.0, 1.0]));
         mesh_data.colour_vertices(.., [255, 255, 255, 255]);
         let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
@@ -110,7 +110,7 @@ pub mod debug_mesh {
         MESH_BOX_LINES.lock().expect("Failed to lock MESH_BOX_LINES").replace(Arc::new(mesh));
 
 
-        let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::LineList);
+        let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
         mesh_data.create_lines_grid([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [32, 32]);
         mesh_data.colour_vertices(.., [255, 255, 255, 255]);
         let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;

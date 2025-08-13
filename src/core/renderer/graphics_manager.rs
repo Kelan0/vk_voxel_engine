@@ -120,18 +120,8 @@ impl DebugMemoryAllocator  {
     pub fn log_debug(&self) {
         let info = self.info.lock().unwrap();
         let bytes = info.allocated_bytes;
-        let mut unit = "Bytes";
-        let mut size = info.allocated_bytes as f64;
 
-        if size > 1024.0 {
-            size /= 1024.0;
-            unit = "KiB";
-
-            if size >= 1024.0 {
-                size /= 1024.0;
-                unit = "MiB"
-            }
-        }
+        let (size, unit) = util::format_size_bytes(info.allocated_bytes);
 
         debug!("GPU Memory: Allocated {bytes} ({size:.2} {unit}) in {} chunks", info.allocations.len())
     }
@@ -465,6 +455,7 @@ impl GraphicsManager {
             wide_lines: true,
             pipeline_statistics_query: true,
             runtime_descriptor_array: true,
+            multi_draw_indirect: true,
             // buffer_device_address: true,
             // smooth_lines: true,
             // bresenham_lines: true,
@@ -1939,9 +1930,28 @@ impl GraphicsManager {
         Ok(())
     }
 
+    pub fn upload_buffer_data_bytes_iter_ref<'a, T, I>(buffer: &Subbuffer<[u8]>, iter: I) -> Result<()>
+    where
+        T: BufferContents + 'a,
+        I: IntoIterator<Item = &'a T>,
+        I::IntoIter: ExactSizeIterator{
+
+        let mut write = buffer.write()?;
+
+        let mut idx = 0;
+        for i in iter {
+            let src = util::get_raw_bytes(i);
+            let dst = &mut write[idx .. idx+src.len()];
+            dst.clone_from_slice(src);
+            idx += src.len();
+        }
+
+        Ok(())
+    }
+
     pub fn upload_buffer_data_iter_ref<'a, T, I>(buffer: &Subbuffer<[T]>, iter: I) -> Result<()>
     where
-        T: BufferContents + Clone + Copy,
+        T: BufferContents + Clone + Copy + 'a,
         I: IntoIterator<Item = &'a T>,
         I::IntoIter: ExactSizeIterator{
 

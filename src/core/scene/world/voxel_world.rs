@@ -1,9 +1,9 @@
 
 pub mod world {
-    use crate::core::{AxisDirection, RenderType, VoxelChunkRenderComponent, VoxelVertex};
+    use crate::core::{AxisDirection, MeshDataConfig, RenderType, Scene, VoxelChunkRenderComponent, VoxelVertex};
     use anyhow::Result;
     use ash::vk::DeviceSize;
-    use foldhash::HashMap;
+    use foldhash::{HashMap, HashSet, HashSetExt};
     use foldhash::HashMapExt;
     use glam::{DVec3, IVec3, U16Vec2, U8Vec4, UVec3, Vec3};
     use log::{debug, warn};
@@ -108,7 +108,7 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 8,
+                chunk_load_radius: 16,
                 max_async_chunks_per_frame: 32,
                 world_generator,
                 chunk_loader,
@@ -173,76 +173,77 @@ pub mod world {
 
             self.update_requested_chunks(engine)?;
             self.update_chunk_queues(engine)?;
+            self.update_chunk_buffers(engine)?;
 
             self.chunk_loader.update();
 
             // WorldGenerator::test_all();
 
-            let mut count = 0;
-            let mut max_staging_size = 0;
-
-            for (_chunk_pos, chunk) in &mut self.loaded_chunks {
-                let chunk_data = chunk.chunk_data.as_ref().unwrap();
-                let staging_size = chunk_data.get_staging_buffer_size();
-                if staging_size > 0 {
-                    count += 1;
-                    max_staging_size = DeviceSize::max(max_staging_size, staging_size);
-                }
-            }
-
-            if max_staging_size > 0 {
-                let t0 = Instant::now();
-
-                let allocator = engine.graphics.memory_allocator();
-
-                let mut res: Vec<Arc<dyn Any>> = vec![];
-                let mut fences = vec![];
-
-                let mut stage_count = 0;
-                let mut staging_offset = 0;
-
-                let mut subbuffer: Option<Subbuffer<[u8]>> = None;
-                let mut staged_bytes = 0;
-
-                let mut iter = self.loaded_chunks.iter_mut();
-                while let Some((_chunk_pos, chunk)) = iter.next() {
-
-                    let chunk_data = chunk.chunk_data.as_ref().unwrap();
-
-                    if chunk_data.get_staging_buffer_size() == 0 {
-                        continue;
-                    }
-                    let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
-
-                    if let Some(buf) = subbuffer.as_ref() {
-                        if buf.size() < chunk_data.get_staging_buffer_size() {
-                            subbuffer = None;
-                        }
-                    }
-
-                    if subbuffer.is_none() {
-                        let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator.clone(), max_staging_size * 3)?;
-                        subbuffer = Some(staging_buffer.clone());
-                        res.push(staging_buffer.buffer().clone());
-                        stage_count += 1;
-                        staged_bytes += staging_buffer.size();
-                    }
-
-                    staging_offset += chunk_data.get_staging_buffer_size();
-
-                    chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
-
-                    let fence = engine.graphics.submit_transfer_commands(cmd_buf)?;
-                    fences.push(fence);
-                }
-
-                for fence in fences {
-                    fence.wait(None)?
-                }
-
-                // let dur = t0.elapsed().as_secs_f64() * 1000.0;
-                // debug!("Updated {count} chunks in {dur} msec - staging size: {staged_bytes} bytes in {stage_count} uploads");
-            }
+            // let mut count = 0;
+            // let mut max_staging_size = 0;
+            //
+            // for (_chunk_pos, chunk) in &mut self.loaded_chunks {
+            //     let chunk_data = chunk.chunk_data.as_ref().unwrap();
+            //     let staging_size = chunk_data.get_staging_buffer_size();
+            //     if staging_size > 0 {
+            //         count += 1;
+            //         max_staging_size = DeviceSize::max(max_staging_size, staging_size);
+            //     }
+            // }
+            //
+            // if max_staging_size > 0 {
+            //     let t0 = Instant::now();
+            //
+            //     let allocator = engine.graphics.memory_allocator();
+            //
+            //     let mut res: Vec<Arc<dyn Any>> = vec![];
+            //     let mut fences = vec![];
+            //
+            //     let mut stage_count = 0;
+            //     let mut staging_offset = 0;
+            //
+            //     let mut subbuffer: Option<Subbuffer<[u8]>> = None;
+            //     let mut staged_bytes = 0;
+            //
+            //     let mut iter = self.loaded_chunks.iter_mut();
+            //     while let Some((_chunk_pos, chunk)) = iter.next() {
+            //
+            //         let chunk_data = chunk.chunk_data.as_ref().unwrap();
+            //
+            //         if chunk_data.get_staging_buffer_size() == 0 {
+            //             continue;
+            //         }
+            //         let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
+            //
+            //         if let Some(buf) = subbuffer.as_ref() {
+            //             if buf.size() < chunk_data.get_staging_buffer_size() {
+            //                 subbuffer = None;
+            //             }
+            //         }
+            //
+            //         if subbuffer.is_none() {
+            //             let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator.clone(), max_staging_size * 3)?;
+            //             subbuffer = Some(staging_buffer.clone());
+            //             res.push(staging_buffer.buffer().clone());
+            //             stage_count += 1;
+            //             staged_bytes += staging_buffer.size();
+            //         }
+            //
+            //         staging_offset += chunk_data.get_staging_buffer_size();
+            //
+            //         chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
+            //
+            //         let fence = engine.graphics.submit_transfer_commands(cmd_buf)?;
+            //         fences.push(fence);
+            //     }
+            //
+            //     for fence in fences {
+            //         fence.wait(None)?
+            //     }
+            //
+            //     // let dur = t0.elapsed().as_secs_f64() * 1000.0;
+            //     // debug!("Updated {count} chunks in {dur} msec - staging size: {staged_bytes} bytes in {stage_count} uploads");
+            // }
 
             // if ticker.time_since_last_dbg() > ticker.debug_interval() {
             //     debug!("Player chunk pos: {}", self.player_chunk_pos);
@@ -283,7 +284,7 @@ pub mod world {
 
             self.chunk_loader.drain_completed_chunks(10, |chunk| {
                 let chunk_pos = chunk.chunk_pos;
-                self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::new(chunk, engine));
+                self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::load(chunk, engine));
                 self.requested_chunks.remove(&chunk_pos);
                 num_completed += 1;
             })?;
@@ -336,6 +337,14 @@ pub mod world {
                 }
 
                 self.requested_chunks.remove(&chunk_pos);
+            }
+
+            Ok(())
+        }
+
+        pub fn update_chunk_buffers(&mut self, engine: &mut Engine) -> Result<()> {
+            for (chunk_pos, chunk) in &mut self.loaded_chunks {
+                chunk.update_render_component(engine);
             }
 
             Ok(())
@@ -451,6 +460,13 @@ pub mod world {
             self.loaded_chunks.contains_key(&chunk_pos)
         }
 
+        pub fn for_each_loaded_chunk<F>(&mut self, mut f: F)
+        where F: FnMut(&IVec3, &VoxelChunkEntity) {
+            self.loaded_chunks.iter().for_each(|(chunk_pos, chunk)| {
+                f(chunk_pos, chunk);
+            });
+        }
+
         pub fn get_chunk(&self, chunk_pos: IVec3) -> Option<&VoxelChunkEntity> {
             // let index = self.loaded_chunks.get(&chunk_pos)?;
             // let chunk = self.chunks.get(*index)?;
@@ -504,7 +520,7 @@ pub mod world {
 
 
     impl VoxelChunkEntity {
-        fn new(chunk_data: Box<VoxelChunkData>, engine: &mut Engine) -> Self {
+        fn load(chunk_data: Box<VoxelChunkData>, engine: &mut Engine) -> Self {
             let chunk_pos = *chunk_data.chunk_pos();
             let pos = get_chunk_world_pos(chunk_pos);
 
@@ -515,10 +531,14 @@ pub mod world {
             //     entity.id().id()
             // });
 
+            let mut render_component = VoxelChunkRenderComponent::new(chunk_pos);
+
+            engine.voxel_renderer.load_chunk(&mut render_component);
+
             let mut entity = engine.scene.create_entity(format!("chunk({},{},{})", chunk_pos.x, chunk_pos.y, chunk_pos.z).as_str());
             entity.add_component(*Transform::new().set_translation(pos.as_vec3()));
             // entity.add_component(RenderComponent::<BaseVertex>::new(RenderType::Static, None));
-            entity.add_component(VoxelChunkRenderComponent::new(chunk_pos));
+            entity.add_component(render_component);
 
             VoxelChunkEntity {
                 entity_id: entity.id().id(),
@@ -527,21 +547,33 @@ pub mod world {
             }
         }
 
+        fn update_render_component(&mut self, engine: &mut Engine) {
+            let chunk_data = self.chunk_data.as_mut().unwrap();
+
+            if let Some(mut render_component) = engine.scene.ecs.get_mut::<VoxelChunkRenderComponent>(self.entity_id) {
+                for i in 0..6 {
+                    render_component.updated_mesh_data[i] = chunk_data.updated_mesh_data[i].take();
+                }
+                render_component.bounds = chunk_data.bounds.clone();
+            }
+        }
+
         fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
             let chunk_data = self.chunk_data.as_mut().unwrap();
 
             let did_update_mesh = chunk_data.create_gpu_mesh(cmd_buf, staging_buffer, engine)?;
 
-
             if did_update_mesh {
                 if let Some(mut render_component) = engine.scene.ecs.get_mut::<VoxelChunkRenderComponent>(self.entity_id) {
-                    render_component.mesh = chunk_data.mesh.clone();
+                    for i in 0..6 {
+                        render_component.updated_mesh_data[i] = chunk_data.updated_mesh_data[i].take();
+                    }
                     render_component.bounds = chunk_data.bounds.clone();
                 }
 
                 // for i in 0..6 {
                 //     if let Some(mut render_component) = engine.scene.ecs.get_mut::<RenderComponent<BaseVertex>>(self.entity_dir_id[i]) {
-                //         render_component.mesh = chunk_data.mesh[i].clone();
+                //         render_component.mesh[i] = chunk_data.mesh[i].clone();
                 //     }
                 // }
             }
@@ -550,6 +582,10 @@ pub mod world {
         }
 
         fn unload(&mut self, engine: &mut Engine) {
+            // debug!("Unload chunk [{}, {}, {}]", self.chunk_pos().x, self.chunk_pos().y, self.chunk_pos().z);
+            if let Some(mut render_component) = engine.scene.ecs.get_mut::<VoxelChunkRenderComponent>(self.entity_id) {
+                engine.voxel_renderer.unload_chunk(render_component.as_mut());
+            }
             engine.scene.destroy_entity(self.entity_id);
 
             // for i in 0..6 {
@@ -621,10 +657,10 @@ pub mod world {
             &self.chunk_pos
         }
 
-        pub fn mesh(&self, dir: AxisDirection) -> Option<&Arc<Mesh<VoxelVertex>>> {
-            self.mesh[dir.index() as usize].as_ref()
-            // self.mesh.as_ref()
-        }
+        // pub fn mesh(&self, dir: AxisDirection) -> Option<&Arc<Mesh<VoxelVertex>>> {
+        //     self.mesh[dir.index() as usize].as_ref()
+        //     // self.mesh.as_ref()
+        // }
 
         pub fn get_block(&self, pos: UVec3) -> u32 {
             let index = calc_index_for_coord(pos, CHUNK_BOUNDS) as usize;
@@ -894,12 +930,12 @@ pub mod world {
                 self.dirty = false;
 
                 // let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_neg_x = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_pos_x = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_neg_y = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_pos_y = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_neg_z = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
-                let mut mesh_data_pos_z = MeshData::<VoxelVertex>::new(MeshPrimitiveType::TriangleList);
+                let mut mesh_data_neg_x = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
+                let mut mesh_data_pos_x = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
+                let mut mesh_data_neg_y = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
+                let mut mesh_data_pos_y = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
+                let mut mesh_data_neg_z = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
+                let mut mesh_data_pos_z = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
 
                 // let p1 = (CHUNK_SIZE as f32) * 0.5;
                 // mesh_data.create_cuboid([p1, p1, p1], [p1, p1, p1]);
@@ -1096,11 +1132,11 @@ pub mod world {
 
 
         pub fn create_gpu_mesh(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<bool> {
-            // let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
-            //
-            // if staging_size == 0 {
-            //     return Ok(false)
-            // }
+            let staging_size = self.get_staging_buffer_size(); // Careful to call this before updated_mesh_data.take()
+
+            if staging_size == 0 {
+                return Ok(false)
+            }
 
             let mut changed = false;
 

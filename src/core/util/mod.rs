@@ -84,3 +84,20 @@ pub fn grow_capacity(mut capacity: u32, required_capacity: u32, growth_rate: f64
     }
     capacity
 }
+
+pub fn format_size_bytes(size_bytes: u64) -> (f64, &'static str) {
+    let mut size = size_bytes as f64;
+    let mut unit = "B";
+
+    if size >= 1024.0 {
+        size /= 1024.0;
+        unit = "KiB";
+
+        if size >= 1024.0 {
+            size /= 1024.0;
+            unit = "MiB";
+        }
+    }
+
+    (size, unit)
+}

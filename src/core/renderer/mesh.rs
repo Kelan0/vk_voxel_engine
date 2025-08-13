@@ -2,7 +2,7 @@ use crate::core::{set_vulkan_debug_name, CommandBuffer, CommandBufferImpl, Engin
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer};
 use vulkano::command_buffer::CopyBufferInfo;
 use vulkano::device::DeviceOwnedVulkanObject;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter};
@@ -13,6 +13,13 @@ pub struct MeshConfiguration<V: Vertex> {
     pub primitive_type: MeshPrimitiveType,
     pub vertices: Vec<V>,
     pub indices: Option<Vec<u32>>,
+    pub vertex_buffer: MeshBufferOption,
+    pub index_buffer: MeshBufferOption,
+}
+
+pub enum MeshBufferOption {
+    AllocateNew,
+    UseExisting(Subbuffer<[u8]>)
 }
 
 impl<V: Vertex> MeshConfiguration<V> {
@@ -32,6 +39,8 @@ pub struct Mesh<V: Vertex> {
     primitive_type: MeshPrimitiveType,
     vertex_buffer: Subbuffer<[V]>,
     index_buffer: Option<Subbuffer<[u32]>>,
+    vertex_count: u32,
+    index_count: u32,
     resource_id: u64,
 }
 
@@ -65,8 +74,10 @@ impl <V: Vertex> Mesh<V> {
     pub fn new(allocator: Arc<dyn MemoryAllocator>, config: MeshConfiguration<V>) -> Result<Self> {
 
         let primitive_type = config.primitive_type;
-        let vertex_buffer = Self::create_and_upload_vertex_buffer(allocator.clone(), config.vertices)?;
-        let index_buffer = Self::create_and_upload_index_buffer(allocator.clone(), config.indices)?;
+        let vertex_count = config.vertex_count() as u32;
+        let index_count = config.index_count() as u32;
+        let vertex_buffer = Self::create_and_upload_vertex_buffer(allocator.clone(), config.vertices, config.vertex_buffer)?;
+        let index_buffer = Self::create_and_upload_index_buffer(allocator.clone(), config.indices, config.index_buffer)?;
         
         let resource_id = Engine::next_resource_id();
 
@@ -74,6 +85,8 @@ impl <V: Vertex> Mesh<V> {
             primitive_type,
             vertex_buffer,
             index_buffer,
+            vertex_count,
+            index_count,
             resource_id
         };
 
@@ -82,6 +95,8 @@ impl <V: Vertex> Mesh<V> {
     pub fn new_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, config: MeshConfiguration<V>) -> Result<Self> {
 
         let primitive_type = config.primitive_type;
+        let vertex_count = config.vertex_count() as u32;
+        let index_count = config.index_count() as u32;
         let (vertex_buffer, index_buffer) = Self::init_buffers_staged(allocator, cmd_buf, staging_buffer, config)?;
 
         let resource_id = Engine::next_resource_id();
@@ -90,12 +105,18 @@ impl <V: Vertex> Mesh<V> {
             primitive_type,
             vertex_buffer,
             index_buffer,
+            vertex_count,
+            index_count,
             resource_id
         };
 
         Ok(mesh)
     }
-    
+
+    pub fn new_buffer(vertex_buffer: Subbuffer<[u8]>, index_buffer: Option<Subbuffer<[u8]>>) {
+        vertex_buffer.cast_aligned::<V>();
+    }
+
     fn create_vertex_buffer(allocator: Arc<dyn MemoryAllocator>, vertex_count: usize, host_write: bool) -> Result<Subbuffer<[V]>> {
 
         let buffer_create_info = BufferCreateInfo{
@@ -149,26 +170,57 @@ impl <V: Vertex> Mesh<V> {
         Ok(index_buffer)
     }
     
-    fn create_and_upload_vertex_buffer(allocator: Arc<dyn MemoryAllocator>, vertices: Vec<V>) -> Result<Subbuffer<[V]>> {
-        let vertex_buffer = Self::create_vertex_buffer(allocator, vertices.len(), true)?;
+    fn create_and_upload_vertex_buffer(allocator: Arc<dyn MemoryAllocator>, vertices: Vec<V>, buffer: MeshBufferOption) -> Result<Subbuffer<[V]>> {
+
+        let vertex_buffer = match buffer {
+            MeshBufferOption::AllocateNew => {
+                Self::create_vertex_buffer(allocator, vertices.len(), true)?
+            }
+            MeshBufferOption::UseExisting(buffer) => {
+                let size = buffer.size();
+                let buf = buffer.cast_aligned::<V>();
+                debug_assert!(buf.len() as usize >= vertices.len(), "Supplied vertex_buffer has capacity for {} vertices, but requires at least {} - Buffer is {size} bytes ({} after aligned)", buf.len(), vertices.len(), buf.size());
+                buf
+            }
+        };
+
         GraphicsManager::upload_buffer_data_iter(&vertex_buffer, vertices)?;
         Ok(vertex_buffer)
     }
     
-    fn create_and_upload_vertex_buffer_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, vertices: Vec<V>) -> Result<Subbuffer<[V]>> {
-        let vertex_buffer = Self::create_vertex_buffer(allocator.clone(), vertices.len(), false)?;
-        // let staging_buffer = GraphicsManager::create_staging_subbuffer::<V>(allocator, vertices.len() as DeviceSize)?;
-        // set_vulkan_debug_name(staging_buffer.buffer(), Some("Mesh-VertexBuffer-StagingBuffer"))?;
+    fn create_and_upload_vertex_buffer_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, vertices: Vec<V>, buffer: MeshBufferOption) -> Result<Subbuffer<[V]>> {
+
+        let vertex_buffer = match buffer {
+            MeshBufferOption::AllocateNew => {
+                Self::create_vertex_buffer(allocator.clone(), vertices.len(), false)?
+            }
+            MeshBufferOption::UseExisting(buffer) => {
+                let buf = buffer.cast_aligned::<V>();
+                debug_assert!(buf.len() as usize >= vertices.len());
+                buf
+            }
+        };
+
         GraphicsManager::upload_buffer_data_bytes_iter(&staging_buffer, vertices)?;
         cmd_buf.copy_buffer(CopyBufferInfo::buffers(staging_buffer.clone(), vertex_buffer.clone()))?;
         Ok(vertex_buffer)
     }
     
-    fn create_and_upload_index_buffer(allocator: Arc<dyn MemoryAllocator>, indices: Option<Vec<u32>>) -> Result<Option<Subbuffer<[u32]>>> {
+    fn create_and_upload_index_buffer(allocator: Arc<dyn MemoryAllocator>, indices: Option<Vec<u32>>, buffer: MeshBufferOption) -> Result<Option<Subbuffer<[u32]>>> {
 
         let index_buffer = match indices {
             Some(indices) => {
-                let index_buffer = Self::create_index_buffer(allocator.clone(), indices.len(), true)?;
+                let index_buffer = match buffer {
+                    MeshBufferOption::AllocateNew => {
+                        Self::create_index_buffer(allocator.clone(), indices.len(), true)?
+                    }
+                    MeshBufferOption::UseExisting(buffer) => {
+                        let buf = buffer.cast_aligned::<u32>();
+                        debug_assert!(buf.len() as usize >= indices.len());
+                        buf
+                    }
+                };
+
                 GraphicsManager::upload_buffer_data_iter(&index_buffer, indices)?;
                 Some(index_buffer)
             }
@@ -178,12 +230,20 @@ impl <V: Vertex> Mesh<V> {
         Ok(index_buffer)
     }
 
-    fn create_and_upload_index_buffer_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, indices: Option<Vec<u32>>) -> Result<Option<Subbuffer<[u32]>>> {
+    fn create_and_upload_index_buffer_staged(allocator: Arc<dyn MemoryAllocator>, cmd_buf: &mut CommandBuffer, staging_buffer: &Subbuffer<[u8]>, indices: Option<Vec<u32>>, buffer: MeshBufferOption) -> Result<Option<Subbuffer<[u32]>>> {
         let index_buffer = match indices {
             Some(indices) => {
-                let index_buffer = Self::create_index_buffer(allocator.clone(), indices.len(), false)?;
-                // let staging_buffer = GraphicsManager::create_staging_subbuffer::<u32>(allocator, indices.len() as DeviceSize)?;
-                // set_vulkan_debug_name(staging_buffer.buffer(), Some("Mesh-IndexBuffer-StagingBuffer"))?;
+                let index_buffer = match buffer {
+                    MeshBufferOption::AllocateNew => {
+                        Self::create_index_buffer(allocator.clone(), indices.len(), false)?
+                    }
+                    MeshBufferOption::UseExisting(buffer) => {
+                        let buf = buffer.cast_aligned::<u32>();
+                        debug_assert!(buf.len() as usize >= indices.len());
+                        buf
+                    }
+                };
+
                 GraphicsManager::upload_buffer_data_bytes_iter(&staging_buffer, indices)?;
                 cmd_buf.copy_buffer(CopyBufferInfo::buffers(staging_buffer.clone(), index_buffer.clone()))?;
                 Some(index_buffer)
@@ -193,10 +253,10 @@ impl <V: Vertex> Mesh<V> {
 
         Ok(index_buffer)
     }
-    
+
     pub fn upload(&mut self, allocator: Arc<dyn MemoryAllocator>, config: MeshConfiguration<V>) -> Result<()> {
-        self.vertex_buffer = Self::create_and_upload_vertex_buffer(allocator.clone(), config.vertices)?;
-        self.index_buffer = Self::create_and_upload_index_buffer(allocator.clone(), config.indices)?;
+        self.vertex_buffer = Self::create_and_upload_vertex_buffer(allocator.clone(), config.vertices, config.vertex_buffer)?;
+        self.index_buffer = Self::create_and_upload_index_buffer(allocator.clone(), config.indices, config.index_buffer)?;
 
         Ok(())
     }
@@ -211,12 +271,12 @@ impl <V: Vertex> Mesh<V> {
 
         if config.indices.is_some() {
             let (sb0, sb1) = staging_buffer.clone().split_at(MeshData::<V>::calc_required_vertex_buffer_size(config.vertex_count()));
-            let vertex_buffer = Self::create_and_upload_vertex_buffer_staged(allocator.clone(), cmd_buf, &sb0, config.vertices)?;
-            let index_buffer = Self::create_and_upload_index_buffer_staged(allocator.clone(), cmd_buf, &sb1, config.indices)?;
+            let vertex_buffer = Self::create_and_upload_vertex_buffer_staged(allocator.clone(), cmd_buf, &sb0, config.vertices, config.vertex_buffer)?;
+            let index_buffer = Self::create_and_upload_index_buffer_staged(allocator.clone(), cmd_buf, &sb1, config.indices, config.index_buffer)?;
             Ok((vertex_buffer, index_buffer))
             
         } else {
-            let vertex_buffer = Self::create_and_upload_vertex_buffer_staged(allocator.clone(), cmd_buf, &staging_buffer, config.vertices)?;
+            let vertex_buffer = Self::create_and_upload_vertex_buffer_staged(allocator.clone(), cmd_buf, &staging_buffer, config.vertices, config.vertex_buffer)?;
             Ok((vertex_buffer, None))
         }
 
@@ -234,9 +294,9 @@ impl <V: Vertex> Mesh<V> {
 
         if let Some(index_buffer) = &self.index_buffer {
             cmd_buf.bind_index_buffer(index_buffer.clone())?;
-            cmd_buf.draw_indexed(index_buffer.len() as u32, instance_count, 0, 0, first_instance)?;
+            cmd_buf.draw_indexed(self.index_count, instance_count, 0, 0, first_instance)?;
         } else {
-            cmd_buf.draw(self.vertex_buffer.len() as u32, instance_count, 0, first_instance)?;
+            cmd_buf.draw(self.vertex_count, instance_count, 0, first_instance)?;
         }
 
         Ok(())
@@ -256,6 +316,14 @@ impl <V: Vertex> Mesh<V> {
 
     pub fn index_buffer(&self) -> Option<&Subbuffer<[u32]>> {
         self.index_buffer.as_ref()
+    }
+
+    pub fn vertex_count(&self) -> u32 {
+        self.vertex_count
+    }
+
+    pub fn index_count(&self) -> u32 {
+        self.index_count
     }
 }
 

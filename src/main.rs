@@ -5,7 +5,7 @@ use std::any::type_name;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{set_default_env_var, util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{set_default_env_var, util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshDataConfig, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
@@ -28,6 +28,7 @@ use simdeez::sse41::Sse41;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 use wide::f32x8;
+use crate::core::MeshBufferOption::AllocateNew;
 
 struct TestGame {
     camera_pitch: f64,
@@ -74,6 +75,8 @@ impl TestGame {
             primitive_type: MeshPrimitiveType::TriangleList,
             vertices: Vec::from(vertices),
             indices: Some(Vec::from(indices)),
+            vertex_buffer: AllocateNew,
+            index_buffer: AllocateNew,
         })?);
 
         self.test_mesh = Some(mesh2);
@@ -143,7 +146,7 @@ impl App for TestGame {
         let c2 = texture_atlas.find_coords_for_cell_norm_u16("crafting_table_front").expect("crafting_table_front - Coords not found in texture atles");
         let c3 = texture_atlas.find_coords_for_cell_norm_u16("planks_oak").expect("planks_oak - Coords not found in texture atles");
 
-        let mut mesh_data: MeshData<BaseVertex> = MeshData::new(MeshPrimitiveType::TriangleList);
+        let mut mesh_data: MeshData<BaseVertex> = MeshData::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
         // mesh_data.create_cuboid_textured([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], [0.0, 0.0], [1.0, 1.0]);
         mesh_data.create_box_face_textured(AxisDirection::NegX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);
         mesh_data.create_box_face_textured(AxisDirection::PosX, [0.5, 0.5, 0.5], [0.5, 0.5], 0.5, c1[0], c1[1]);

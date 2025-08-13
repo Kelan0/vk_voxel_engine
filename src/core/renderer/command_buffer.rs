@@ -5,8 +5,8 @@ use anyhow::{anyhow, Result};
 use ash::{vk};
 use ash::vk::{CommandBufferUsageFlags, Extent2D, Extent3D, ImageSubresourceLayers, Offset2D, Offset3D, Rect2D};
 use smallvec::{ExtendFromSlice, SmallVec};
-use vulkano::buffer::IndexBuffer;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SecondaryAutoCommandBuffer, SubpassBeginInfo, SubpassEndInfo};
+use vulkano::buffer::{IndexBuffer, IndexType, Subbuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, CopyBufferToImageInfo, DrawIndexedIndirectCommand, DrawIndirectCommand, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SecondaryAutoCommandBuffer, SubpassBeginInfo, SubpassEndInfo};
 use vulkano::descriptor_set::DescriptorSetsCollection;
 use vulkano::format::ClearValue;
 use vulkano::pipeline::graphics::vertex_input::VertexBuffersCollection;
@@ -45,9 +45,19 @@ pub trait CommandBufferImpl {
 
     fn bind_index_buffer(&mut self, index_buffer: impl Into<IndexBuffer>) -> Result<()>;
 
-    fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) -> Result<()>;
+    fn bind_index_buffer_type(&mut self, index_buffer: impl Into<IndexBuffer>, index_type: IndexType) -> Result<()>;
 
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) -> Result<()>;
+
+    fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) -> Result<()>;
+
+    fn draw_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>) -> Result<()>;
+
+    fn draw_indexed_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>) -> Result<()>;
+
+    fn draw_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()>;
+
+    fn draw_indexed_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()>;
 
     fn begin_render_pass(&mut self, render_pass_begin_info: RenderPassBeginInfo, subpass_begin_info: SubpassBeginInfo) -> Result<()>;
 
@@ -165,6 +175,36 @@ impl CommandBufferImpl for VulkanoCommandBuffer {
         Ok(())
     }
 
+    fn bind_index_buffer_type(&mut self, index_buffer: impl Into<IndexBuffer>, index_type: IndexType) -> Result<()> {
+        // let index_buffer = index_buffer.into();
+        // match index_type {
+        //     IndexType::U8 => {
+        //         let index_buffer = index_buffer.as_bytes().clone().reinterpret::<u8>();
+        //         match &mut self.cmd_buf {
+        //             VulkanoCommandBufferType::Primary(cmd_buf) => { cmd_buf.bind_index_buffer(index_buffer)?; },
+        //             VulkanoCommandBufferType::Secondary(cmd_buf) => { cmd_buf.bind_index_buffer(index_buffer)?; }
+        //         };
+        //     },
+        //     IndexType::U16 => {
+        //         let index_buffer = index_buffer.as_bytes().clone().reinterpret::<u16>();
+        //     },
+        //     IndexType::U32 => {
+        //         let index_buffer = index_buffer.as_bytes().clone().reinterpret::<u32>();
+        //     },
+        //     _ => return Err(anyhow!("bind_index_buffer_type() Invalid IndexType"))
+        // };
+        // Ok(())
+        panic!("bind_index_buffer_type() Not implemented for Vulkano")
+    }
+
+    fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) -> Result<()> {
+        match &mut self.cmd_buf {
+            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw(vertex_count, instance_count, first_vertex, first_instance) }?; }
+            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw(vertex_count, instance_count, first_vertex, first_instance) }?; }
+        };
+        Ok(())
+    }
+
     fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) -> Result<()> {
         match &mut self.cmd_buf {
             VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance) }?; }
@@ -173,10 +213,34 @@ impl CommandBufferImpl for VulkanoCommandBuffer {
         Ok(())
     }
 
-    fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) -> Result<()> {
+    fn draw_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>) -> Result<()> {
         match &mut self.cmd_buf {
-            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw(vertex_count, instance_count, first_vertex, first_instance) }?; }
-            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw(vertex_count, instance_count, first_vertex, first_instance) }?; }
+            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw_indirect(indirect_buffer) }?; }
+            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw_indirect(indirect_buffer) }?; }
+        };
+        Ok(())
+    }
+
+    fn draw_indexed_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>) -> Result<()> {
+        match &mut self.cmd_buf {
+            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw_indexed_indirect(indirect_buffer) }?; }
+            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw_indexed_indirect(indirect_buffer) }?; }
+        };
+        Ok(())
+    }
+
+    fn draw_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()> {
+        match &mut self.cmd_buf {
+            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw_indirect_count(indirect_buffer, count_buffer, max_draw_count) }?; }
+            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw_indirect_count(indirect_buffer, count_buffer, max_draw_count) }?; }
+        };
+        Ok(())
+    }
+
+    fn draw_indexed_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()> {
+        match &mut self.cmd_buf {
+            VulkanoCommandBufferType::Primary(cmd_buf) => { unsafe { cmd_buf.draw_indexed_indirect_count(indirect_buffer, count_buffer, max_draw_count) }?; }
+            VulkanoCommandBufferType::Secondary(cmd_buf) => { unsafe { cmd_buf.draw_indexed_indirect_count(indirect_buffer, count_buffer, max_draw_count) }?; }
         };
         Ok(())
     }
@@ -367,14 +431,68 @@ impl CommandBufferImpl for AshCommandBuffer {
         Ok(())
     }
 
+    fn bind_index_buffer_type(&mut self, index_buffer: impl Into<IndexBuffer>, index_type: IndexType) -> Result<()> {
+        let index_buffer = index_buffer.into();
+        let buffer = index_buffer.as_bytes();
+        let offset = buffer.offset();
+        unsafe { self.device.cmd_bind_index_buffer(self.cmd_buf, buffer.buffer().handle(), offset, index_type.into()) };
+        Ok(())
+    }
+
+    fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) -> Result<()> {
+        unsafe { self.device.cmd_draw(self.cmd_buf, vertex_count, instance_count, first_vertex, first_instance) };
+        self.debug_draw_commands += 1;
+        Ok(())
+    }
+
     fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) -> Result<()> {
         unsafe { self.device.cmd_draw_indexed(self.cmd_buf, index_count, instance_count, first_index, vertex_offset, first_instance) };
         self.debug_draw_commands += 1;
         Ok(())
     }
 
-    fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) -> Result<()> {
-        unsafe { self.device.cmd_draw(self.cmd_buf, vertex_count, instance_count, first_vertex, first_instance) };
+    fn draw_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>) -> Result<()> {
+        let buffer = indirect_buffer.buffer().handle();
+        let offset = indirect_buffer.offset();
+        let draw_count = indirect_buffer.len() as u32; // Number of commands in the buffer
+        let stride = size_of::<DrawIndirectCommand>() as u32;
+        unsafe { self.device.cmd_draw_indirect(self.cmd_buf, buffer, offset, draw_count, stride) };
+        self.debug_draw_commands += 1;
+        Ok(())
+    }
+
+    fn draw_indexed_indirect(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>) -> Result<()> {
+        let buffer = indirect_buffer.buffer().handle();
+        let offset = indirect_buffer.offset();
+        let draw_count = indirect_buffer.len() as u32; // Number of commands in the buffer
+        let stride = size_of::<DrawIndexedIndirectCommand>() as u32;
+        unsafe { self.device.cmd_draw_indexed_indirect(self.cmd_buf, buffer, offset, draw_count, stride) };
+        self.debug_draw_commands += 1;
+        Ok(())
+    }
+
+    fn draw_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()> {
+        let buffer = indirect_buffer.buffer().handle();
+        let offset = indirect_buffer.offset();
+        let stride = size_of::<DrawIndirectCommand>() as u32;
+
+        let count_buffer_offset = count_buffer.offset();
+        let count_buffer = count_buffer.buffer().handle();
+
+        unsafe { self.device.cmd_draw_indirect_count(self.cmd_buf, buffer, offset, count_buffer, count_buffer_offset, max_draw_count, stride) };
+        self.debug_draw_commands += 1;
+        Ok(())
+    }
+
+    fn draw_indexed_indirect_count(&mut self, indirect_buffer: Subbuffer<[DrawIndexedIndirectCommand]>, count_buffer: Subbuffer<u32>, max_draw_count: u32) -> Result<()> {
+        let buffer = indirect_buffer.buffer().handle();
+        let offset = indirect_buffer.offset();
+        let stride = size_of::<DrawIndexedIndirectCommand>() as u32;
+
+        let count_buffer_offset = count_buffer.offset();
+        let count_buffer = count_buffer.buffer().handle();
+
+        unsafe { self.device.cmd_draw_indexed_indirect_count(self.cmd_buf, buffer, offset, count_buffer, count_buffer_offset, max_draw_count, stride) };
         self.debug_draw_commands += 1;
         Ok(())
     }

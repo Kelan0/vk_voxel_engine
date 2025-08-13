@@ -291,18 +291,9 @@ impl Engine {
     }
 
     fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {
-        egui::Window::new("Test Window").show(ctx, |ui| {
-
-            ui.label("Hello World");
-            if ui.button("Test").clicked() {
-                info!("Clicked a button!");
-            }
-
-            ctx.texture_ui(ui)
-        });
-
         self.scene.draw_gui(ticker, ctx);
         self.frame_profiler.draw_gui(ticker, ctx);
+        self.voxel_renderer.draw_debug_gui(ticker, ctx);
     }
     
     fn shutdown(&mut self) {

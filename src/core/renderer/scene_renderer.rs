@@ -1,5 +1,5 @@
 use crate::application::Ticker;
-use crate::core::{set_vulkan_debug_name, util, CommandBuffer, CommandBufferImpl, Engine, FrameCompleteEvent, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshPrimitiveType, RecreateSwapchainEvent, RenderCamera, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
+use crate::core::{set_vulkan_debug_name, util, CommandBuffer, CommandBufferImpl, Engine, FrameCompleteEvent, GraphicsManager, GraphicsPipelineBuilder, Material, Mesh, MeshData, MeshDataConfig, MeshPrimitiveType, RecreateSwapchainEvent, RenderCamera, RenderComponent, RenderType, Scene, StandardMemoryAllocator, Texture, Transform, VertexHasColour, VertexHasNormal, VertexHasPosition, VertexHasTexture};
 use crate::{function_name, profile_scope_fn};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -256,7 +256,7 @@ impl DebugRenderContext {
 
     pub fn begin(&mut self, primitive_type: MeshPrimitiveType) -> &mut MeshData<BaseVertex> {
         assert_eq!(self.mesh_builder, None);
-        self.mesh_builder = Some(MeshData::<BaseVertex>::new(primitive_type));
+        self.mesh_builder = Some(MeshData::<BaseVertex>::new(MeshDataConfig::new(primitive_type)));
         self.mesh_builder.as_mut().unwrap()
     }
 
