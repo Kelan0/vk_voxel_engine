@@ -287,7 +287,7 @@ impl Engine {
     }
 
     fn run_gui(ticker: &mut Ticker, engine: &mut Engine, ctx: &egui::Context) {
-        engine.draw_gui(ticker, ctx);
+        // engine.draw_gui(ticker, ctx);
     }
 
     fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {

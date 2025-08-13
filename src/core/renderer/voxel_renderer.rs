@@ -183,6 +183,7 @@ struct BatchedDrawCommand {
 #[derive(Component, Clone)]
 pub struct VoxelChunkRenderComponent {
     chunk_pos: IVec3,
+    pub update_mesh: [bool; 6],
     pub updated_mesh_data: [Option<MeshData<VoxelVertex>>; 6],
     pub bounds: [Option<AxisAlignedBoundingBox>; 6],
     pub material: Option<Material>,
@@ -232,13 +233,11 @@ impl ChunkBufferRegion {
 
 impl VoxelChunkRenderComponent {
     pub fn new(chunk_pos: IVec3) -> Self {
-        Self::new_init(chunk_pos, array::from_fn(|_| None), array::from_fn(|_| None))
-    }
-    pub fn new_init(chunk_pos: IVec3, update_mesh_data: [Option<MeshData<VoxelVertex>>; 6], bounds: [Option<AxisAlignedBoundingBox>; 6]) -> Self {
         VoxelChunkRenderComponent{
             // mesh,
-            updated_mesh_data: update_mesh_data,
-            bounds,
+            update_mesh: Default::default(),
+            updated_mesh_data: Default::default(),
+            bounds: Default::default(),
             chunk_pos,
             material: None,
             chunk_mesh: Default::default(),
@@ -1418,33 +1417,35 @@ impl VoxelRenderer {
         // Loop over updated chunks, figure out how much space needs to be allocated in the mesh buffer, and free necessary meshes.
         for (_entity, mut render_component) in query.iter_mut(&mut scene.ecs) {
             for i in 0..6 {
-                if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
-                    scene_changed = true;
+                if render_component.update_mesh[i] {
+                    if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
+                        scene_changed = true;
 
-                    let vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
-                    let index_buffer_size = mesh_data.get_required_index_buffer_size();
+                        let vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
+                        let index_buffer_size = mesh_data.get_required_index_buffer_size();
 
-                    required_vertex_buffer_size = DeviceSize::max(required_vertex_buffer_size, vertex_buffer_size);
-                    required_index_buffer_size = DeviceSize::max(required_index_buffer_size, index_buffer_size);
+                        required_vertex_buffer_size = DeviceSize::max(required_vertex_buffer_size, vertex_buffer_size);
+                        required_index_buffer_size = DeviceSize::max(required_index_buffer_size, index_buffer_size);
 
-                    if let Some(chunk_mesh) = &mut render_component.chunk_mesh[i] {
-                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < vertex_buffer_size {
-                            // The existing allocated buffer region is too small. A new one will be allocated
-                            self.chunk_buffer_handler.batch_free(chunk_mesh.vertex_buffer_alloc);
-                            chunk_mesh.vertex_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
+                        if let Some(chunk_mesh) = &mut render_component.chunk_mesh[i] {
+                            if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < vertex_buffer_size {
+                                // The existing allocated buffer region is too small. A new one will be allocated
+                                self.chunk_buffer_handler.batch_free(chunk_mesh.vertex_buffer_alloc);
+                                chunk_mesh.vertex_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
+                                vertex_buffer_alloc_count += 1;
+                            }
+
+                            if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size >= index_buffer_size {
+                                // The existing allocated buffer region is too small. A new one will be allocated
+                                self.chunk_buffer_handler.batch_free(chunk_mesh.index_buffer_alloc);
+                                chunk_mesh.index_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
+                                index_buffer_alloc_count += 1;
+                            }
+                        } else {
+                            // No mesh allocated, we need both a vertex and index buffer.
                             vertex_buffer_alloc_count += 1;
-                        }
-
-                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size >= index_buffer_size {
-                            // The existing allocated buffer region is too small. A new one will be allocated
-                            self.chunk_buffer_handler.batch_free(chunk_mesh.index_buffer_alloc);
-                            chunk_mesh.index_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
                             index_buffer_alloc_count += 1;
                         }
-                    } else {
-                        // No mesh allocated, we need both a vertex and index buffer.
-                        vertex_buffer_alloc_count += 1;
-                        index_buffer_alloc_count += 1;
                     }
                 }
             }
@@ -1472,25 +1473,26 @@ impl VoxelRenderer {
         // Assign the allocated buffer regions to the chunk render components
         for (_entity, mut render_component) in query.iter_mut(&mut scene.ecs) {
             for i in 0..6 {
-                if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
-                    let required_vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
-                    let required_index_buffer_size = mesh_data.get_required_index_buffer_size();
+                if render_component.update_mesh[i] {
+                    if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
+                        let required_vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
+                        let required_index_buffer_size = mesh_data.get_required_index_buffer_size();
 
-                    if render_component.chunk_mesh[i].is_none() {
-                        render_component.chunk_mesh[i] = Some(ChunkMesh::default())
+                        if render_component.chunk_mesh[i].is_none() {
+                            render_component.chunk_mesh[i] = Some(ChunkMesh::default())
+                        }
+
+                        let chunk_mesh = render_component.chunk_mesh[i].as_mut().unwrap();
+                        chunk_mesh.index_count = 0;
+
+                        if chunk_mesh.vertex_buffer_alloc.buffer_region.buffer_size < required_vertex_buffer_size {
+                            chunk_mesh.vertex_buffer_alloc = chunk_vertex_buffers.pop().unwrap();
+                        }
+
+                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < required_index_buffer_size {
+                            chunk_mesh.index_buffer_alloc = chunk_index_buffers.pop().unwrap();
+                        }
                     }
-
-                    let chunk_mesh = render_component.chunk_mesh[i].as_mut().unwrap();
-                    chunk_mesh.index_count = 0;
-
-                    if chunk_mesh.vertex_buffer_alloc.buffer_region.buffer_size < required_vertex_buffer_size {
-                        chunk_mesh.vertex_buffer_alloc = chunk_vertex_buffers.pop().unwrap();
-                    }
-
-                    if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < required_index_buffer_size {
-                        chunk_mesh.index_buffer_alloc = chunk_index_buffers.pop().unwrap();
-                    }
-
                 }
             }
         };
@@ -1599,12 +1601,16 @@ impl VoxelRenderer {
         for i in 0..6 {
             render_info.chunk_mesh[i] = render_component.chunk_mesh[i].clone();
 
-            if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
-                if let Some(chunk_mesh) = &mut render_component.chunk_mesh[i] {
-                    self.upload_chunk_mesh_data(mesh_data, chunk_mesh)?;
-                    render_component.updated_mesh_data[i] = None;
+            if render_component.update_mesh[i] {
+                if let Some(mesh_data) = &render_component.updated_mesh_data[i] {
+                    if let Some(chunk_mesh) = &mut render_component.chunk_mesh[i] {
+                        self.upload_chunk_mesh_data(mesh_data, chunk_mesh)?;
+                        // render_component.updated_mesh_data[i] = None;
+                        render_component.update_mesh[i] = false;
+                    }
                 }
             }
+
         }
 
         self.render_info.push(render_info);

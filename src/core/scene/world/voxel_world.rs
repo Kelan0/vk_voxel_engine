@@ -108,8 +108,8 @@ pub mod world {
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 16,
-                max_async_chunks_per_frame: 32,
+                chunk_load_radius: 40,
+                max_async_chunks_per_frame: 500,
                 world_generator,
                 chunk_loader,
 
@@ -256,6 +256,7 @@ pub mod world {
         /// or unload queues. Change the request status to pending.
         /// Also drain the completed chunks from the ChunkLoader thread
         fn update_requested_chunks(&mut self, engine: &mut Engine) -> Result<()> {
+            profile_scope_fn!(&engine.frame_profiler);
 
             let mut chunks_to_load = vec![];
             for (chunk_pos, request) in &mut self.requested_chunks {
@@ -282,21 +283,23 @@ pub mod world {
 
             let t0 = Instant::now();
 
-            self.chunk_loader.drain_completed_chunks(10, |chunk| {
-                let chunk_pos = chunk.chunk_pos;
-                self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::load(chunk, engine));
-                self.requested_chunks.remove(&chunk_pos);
-                num_completed += 1;
-            })?;
 
             self.chunk_loader.drain_canceled_chunks(usize::MAX, false, |chunk_pos| {
                 self.requested_chunks.remove(&chunk_pos);
                 num_canceled += 1;
             })?;
 
+            self.chunk_loader.drain_completed_chunks(self.max_async_chunks_per_frame as usize, |chunk| {
+                let chunk_pos = chunk.chunk_pos;
+                self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::load(chunk, engine));
+                self.requested_chunks.remove(&chunk_pos);
+                num_completed += 1;
+            })?;
+
             let dur = t0.elapsed().as_secs_f64() * 1000.0;
             if dur > 2.0 {
-                warn!("ChunkLoader drained {num_completed} completed chunks, {num_canceled} canceled chunks - Took {dur} msec");
+                let remaining_completed = self.chunk_loader.num_completed_chunks().unwrap();
+                warn!("ChunkLoader drained {num_completed} of {remaining_completed} completed chunks, {num_canceled} canceled chunks - Took {dur} msec");
             }
 
             Ok(())
@@ -307,6 +310,8 @@ pub mod world {
         /// opposite direction.
         /// We then submit a limited list of requests to the ChunkLoader thread to handle.
         fn update_chunk_queues(&mut self, engine: &mut Engine) -> Result<()> {
+            profile_scope_fn!(&engine.frame_profiler);
+
             let center_pos = self.chunk_load_center_pos.as_dvec3();
 
             if self.chunk_load_center_pos != self.player_chunk_pos {
@@ -343,6 +348,8 @@ pub mod world {
         }
 
         pub fn update_chunk_buffers(&mut self, engine: &mut Engine) -> Result<()> {
+            profile_scope_fn!(&engine.frame_profiler);
+
             for (chunk_pos, chunk) in &mut self.loaded_chunks {
                 chunk.update_render_component(engine);
             }
@@ -552,33 +559,13 @@ pub mod world {
 
             if let Some(mut render_component) = engine.scene.ecs.get_mut::<VoxelChunkRenderComponent>(self.entity_id) {
                 for i in 0..6 {
-                    render_component.updated_mesh_data[i] = chunk_data.updated_mesh_data[i].take();
+                    if let Some(mesh_data) = chunk_data.updated_mesh_data[i].take() {
+                        render_component.updated_mesh_data[i] = Some(mesh_data);
+                        render_component.update_mesh[i] = true;
+                    }
                 }
                 render_component.bounds = chunk_data.bounds.clone();
             }
-        }
-
-        fn update_buffers(&mut self, cmd_buf: &mut CommandBuffer, staging_buffer: &mut Option<Subbuffer<[u8]>>, engine: &mut Engine) -> Result<()> {
-            let chunk_data = self.chunk_data.as_mut().unwrap();
-
-            let did_update_mesh = chunk_data.create_gpu_mesh(cmd_buf, staging_buffer, engine)?;
-
-            if did_update_mesh {
-                if let Some(mut render_component) = engine.scene.ecs.get_mut::<VoxelChunkRenderComponent>(self.entity_id) {
-                    for i in 0..6 {
-                        render_component.updated_mesh_data[i] = chunk_data.updated_mesh_data[i].take();
-                    }
-                    render_component.bounds = chunk_data.bounds.clone();
-                }
-
-                // for i in 0..6 {
-                //     if let Some(mut render_component) = engine.scene.ecs.get_mut::<RenderComponent<BaseVertex>>(self.entity_dir_id[i]) {
-                //         render_component.mesh[i] = chunk_data.mesh[i].clone();
-                //     }
-                // }
-            }
-
-            Ok(())
         }
 
         fn unload(&mut self, engine: &mut Engine) {

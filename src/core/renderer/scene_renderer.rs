@@ -193,6 +193,7 @@ pub struct SceneRenderer {
     object_data: Vec<ObjectDataUBO>,
     object_indices: Vec<ObjectIndexUBO>,
     material_data: Vec<MaterialUBO>,
+    draw_commands: Vec<BatchedDrawCommand>,
     static_object_count: u32,
     dynamic_object_count: u32,
     max_object_count: u32,
@@ -232,6 +233,11 @@ struct FrameResource {
     buffer_debug_object_indices: Option<Subbuffer<[ObjectIndexUBO]>>,
     descriptor_set_debug_world: Option<Arc<DescriptorSet>>,
     descriptor_writes_debug_world: Vec<WriteDescriptorSet>,
+
+    debug_render_info: Vec<RenderInfo>,
+    debug_object_data: Vec<DebugObjectDataUBO>,
+    debug_object_indices: Vec<ObjectIndexUBO>,
+    debug_draw_commands: Vec<BatchedDrawCommand>,
 
     active_resources: Vec<Arc<dyn Any>>,
 }
@@ -301,6 +307,7 @@ impl SceneRenderer {
             render_info: vec![],
             object_data: vec![],
             object_indices: vec![],
+            draw_commands: vec![],
             // meshes: vec![],
 
             material_data: vec![],
@@ -361,6 +368,11 @@ impl SceneRenderer {
                 buffer_debug_object_indices: None,
                 descriptor_set_debug_world: None,
                 descriptor_writes_debug_world: vec![],
+
+                debug_render_info: vec![],
+                debug_object_data: vec![],
+                debug_object_indices: vec![],
+                debug_draw_commands: vec![],
 
                 active_resources: vec![]
             }
@@ -455,6 +467,9 @@ impl SceneRenderer {
         cmd_buf.set_viewport(0, [viewport].into_iter().collect())?;
         cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_world.clone(), descriptor_set_materials.clone()])?;
 
+        self.draw_commands.clear();
+        Self::build_batched_draw_commands(&self.object_indices, &self.render_info, &mut self.draw_commands);
+
         if engine.wireframe_mode().is_solid() {
             let solid_graphics_pipeline = self.solid_graphics_pipeline.as_ref().unwrap();
             cmd_buf.bind_pipeline_graphics(solid_graphics_pipeline.clone())?;
@@ -519,9 +534,11 @@ impl SceneRenderer {
         Self::map_debug_object_data_buffer(resource, self.max_debug_object_count as usize, allocator.clone())?;
         Self::map_debug_object_indices_buffer(resource, self.max_debug_object_count as usize, allocator.clone())?;
 
-        let mut render_info = Vec::new();
-        let mut object_data = Vec::new();
-        let mut object_indices = Vec::new();
+        resource.debug_render_info.clear();
+        resource.debug_object_data.clear();
+        resource.debug_object_indices.clear();
+        resource.debug_draw_commands.clear();
+
         let mut index = 0;
 
         for (mesh, object_info) in self.debug_render_context.meshes.iter() {
@@ -529,20 +546,20 @@ impl SceneRenderer {
             object_info.transform.write_model_matrix(&mut obj.model_matrix);
             object_info.colour.write_to_slice(&mut obj.colour);
 
-            render_info.push(RenderInfo{
+            resource.debug_render_info.push(RenderInfo{
                 mesh: mesh.clone(),
                 index
             });
 
-            object_data.push(obj);
-            object_indices.push(ObjectIndexUBO{ index });
+            resource.debug_object_data.push(obj);
+            resource.debug_object_indices.push(ObjectIndexUBO{ index });
 
             index += 1;
         }
 
-        Self::update_debug_object_data_gpu_resources(&object_data, &object_indices, resource)?;
+        Self::update_debug_object_data_gpu_resources(resource)?;
 
-        let draw_commands = Self::build_batched_draw_commands(&object_indices, &render_info);
+        Self::build_batched_draw_commands(&resource.debug_object_indices, &resource.debug_render_info, &mut resource.debug_draw_commands);
 
         let debug_lines_graphics_pipeline = self.debug_lines_graphics_pipeline.as_ref().unwrap();
         let descriptor_set_camera = resource.descriptor_set_camera.as_ref().unwrap();
@@ -552,9 +569,9 @@ impl SceneRenderer {
         cmd_buf.bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline_layout.clone(), 0, vec![descriptor_set_camera.clone(), descriptor_set_debug_world.clone()])?;
         cmd_buf.bind_pipeline_graphics(debug_lines_graphics_pipeline.clone())?;
 
-        for draw_command in draw_commands {
+        for draw_command in resource.debug_draw_commands.iter() {
             draw_command.mesh.draw(cmd_buf, draw_command.instance_count, draw_command.first_instance)?;
-            resource.active_resources.push(draw_command.mesh);
+            resource.active_resources.push(draw_command.mesh.clone());
         }
 
         self.debug_render_context.reset();
@@ -745,13 +762,12 @@ impl SceneRenderer {
     }
 
     fn draw_scene(&mut self, cmd_buf: &mut CommandBuffer, _scene: &mut Scene, frame_index: usize) -> Result<()> {
-        let draw_commands = Self::build_batched_draw_commands(&self.object_indices, &self.render_info);
 
         let resource = &mut self.resources[frame_index];
 
-        for draw_command in draw_commands {
+        for draw_command in self.draw_commands.iter() {
             draw_command.mesh.draw(cmd_buf, draw_command.instance_count, draw_command.first_instance)?;
-            resource.active_resources.push(draw_command.mesh);
+            resource.active_resources.push(draw_command.mesh.clone());
         }
 
         // let mut query = scene.world.query::<(Entity, &RenderComponent<BaseVertex>, &Transform)>();
@@ -763,8 +779,8 @@ impl SceneRenderer {
         Ok(())
     }
 
-    fn build_batched_draw_commands(object_indices: &[ObjectIndexUBO], render_info: &[RenderInfo]) -> Vec<BatchedDrawCommand> {
-        let mut draw_commands = vec![];
+    fn build_batched_draw_commands(object_indices: &[ObjectIndexUBO], render_info: &[RenderInfo], out_draw_commands: &mut Vec<BatchedDrawCommand>) {
+        // let mut draw_commands = vec![];
 
         let mut first_instance = 0;
         let mut curr_draw_command = None;
@@ -780,7 +796,7 @@ impl SceneRenderer {
                 });
             } else if curr_draw_command.as_ref().unwrap().mesh != render_info.mesh {
                 first_instance += curr_draw_command.as_ref().unwrap().instance_count;
-                draw_commands.push(curr_draw_command.as_ref().unwrap().clone());
+                out_draw_commands.push(curr_draw_command.as_ref().unwrap().clone());
                 curr_draw_command = Some(BatchedDrawCommand{
                     mesh: render_info.mesh.clone(),
                     instance_count: 0,
@@ -792,10 +808,8 @@ impl SceneRenderer {
         }
 
         if let Some(draw_command) = curr_draw_command && draw_command.instance_count > 0 {
-            draw_commands.push(draw_command);
+            out_draw_commands.push(draw_command);
         }
-
-        draw_commands
     }
 
     fn update_gpu_resources(&mut self, engine: &Engine) -> Result<()> {
@@ -902,7 +916,7 @@ impl SceneRenderer {
         Ok(())
     }
 
-    fn update_debug_object_data_gpu_resources(debug_object_data: &[DebugObjectDataUBO], debug_object_indices: &[ObjectIndexUBO], resource: &mut FrameResource) -> Result<()> {
+    fn update_debug_object_data_gpu_resources(resource: &mut FrameResource) -> Result<()> {
 
         if !resource.descriptor_writes_debug_world.is_empty() {
             let descriptor_set_debug_world = resource.descriptor_set_debug_world.as_ref().unwrap().clone();
@@ -914,16 +928,16 @@ impl SceneRenderer {
         let buffer_debug_object_data = resource.buffer_debug_object_data.as_mut().unwrap();
 
         let idx_begin = 0;
-        let idx_end = debug_object_data.len();
+        let idx_end = resource.debug_object_data.len();
 
-        debug_assert!(debug_object_data.len() <= buffer_debug_object_data.len() as usize);
+        debug_assert!(resource.debug_object_data.len() <= buffer_debug_object_data.len() as usize);
         let mut writer = buffer_debug_object_data.write()?;
-        writer[idx_begin .. idx_end].copy_from_slice(debug_object_data);
+        writer[idx_begin .. idx_end].copy_from_slice(&resource.debug_object_data);
 
         let buffer_debug_object_indices = resource.buffer_debug_object_indices.as_mut().unwrap();
-        debug_assert!(debug_object_indices.len() <= buffer_debug_object_indices.len() as usize);
+        debug_assert!(resource.debug_object_indices.len() <= buffer_debug_object_indices.len() as usize);
         let mut writer = buffer_debug_object_indices.write()?;
-        writer[idx_begin .. idx_end].copy_from_slice(debug_object_indices);
+        writer[idx_begin .. idx_end].copy_from_slice(&resource.debug_object_indices);
 
         Ok(())
     }

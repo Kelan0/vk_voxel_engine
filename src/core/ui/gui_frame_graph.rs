@@ -1,5 +1,6 @@
 use std::cell::{RefCell, UnsafeCell};
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::time::Instant;
 use egui::{PopupAnchor, Tooltip};
 use egui_plot::PlotItem;
