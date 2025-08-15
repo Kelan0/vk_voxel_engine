@@ -43,7 +43,7 @@ use vulkano::sync::semaphore::{Semaphore, SemaphoreCreateInfo};
 use vulkano::sync::{AccessFlags, GpuFuture, PipelineStage, PipelineStages, Sharing};
 use vulkano::{sync, DeviceSize, VulkanLibrary, VulkanObject};
 
-const ENABLE_VALIDATION_LAYERS: bool = true;
+const ENABLE_VALIDATION_LAYERS: bool = false;
 
 // pub type CommandBuffer<L> = AutoCommandBufferBuilder<L>;
 // pub type PrimaryCommandBuffer = CommandBuffer<PrimaryAutoCommandBuffer>;

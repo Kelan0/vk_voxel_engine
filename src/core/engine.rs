@@ -346,6 +346,7 @@ impl Tickable for Engine {
         });
 
         if self.window.did_quit() {
+            info!("Stopping");
             ticker.stop();
         }
 

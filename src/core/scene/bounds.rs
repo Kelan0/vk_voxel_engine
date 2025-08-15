@@ -87,6 +87,8 @@ pub trait BoundingVolumeDebugDraw {
 }
 
 pub mod debug_mesh {
+    use std::any::Any;
+    use std::collections::HashMap;
     use crate::core::{util, BaseVertex, GraphicsManager, Mesh, MeshData, MeshDataConfig, MeshPrimitiveType};
     use anyhow::Result;
     use lazy_static::lazy_static;
@@ -95,7 +97,7 @@ pub mod debug_mesh {
     lazy_static! {
         // dirty mutable global state...
         static ref MESH_BOX_LINES: Mutex<Option<Arc<Mesh<BaseVertex>>>> = Mutex::new(None);
-        static ref MESH_GRID_32_LINES: Mutex<Option<Arc<Mesh<BaseVertex>>>> = Mutex::new(None);
+        static ref MESH_GRID_LINES: Mutex<Option<HashMap<u32, Arc<Mesh<BaseVertex>>>>> = Mutex::new(None);
     }
 
     pub fn init(graphics: &GraphicsManager) -> Result<()> {
@@ -110,24 +112,49 @@ pub mod debug_mesh {
         MESH_BOX_LINES.lock().expect("Failed to lock MESH_BOX_LINES").replace(Arc::new(mesh));
 
 
-        let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
-        mesh_data.create_lines_grid([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [32, 32]);
-        mesh_data.colour_vertices(.., [255, 255, 255, 255]);
-        let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
-        let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
-        MESH_GRID_32_LINES.lock().expect("Failed to lock MESH_GRID_32_LINES").replace(Arc::new(mesh));
+        // keep allocated staging buffers until after the transfer commands have completed.
+        let mut temp_resources: Vec<Arc<dyn Any>> = vec![];
+
+        let mut mesh_grid_lines = HashMap::new();
+
+        for i in 2..=5 {
+            let dim = 1 << i;
+
+            let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
+            mesh_data.create_lines_grid([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [dim, dim]);
+            mesh_data.colour_vertices(.., [255, 255, 255, 255]);
+            let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
+            let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
+
+            temp_resources.push(staging_buffer.buffer().clone());
+
+            mesh_grid_lines.insert(dim, Arc::new(mesh));
+        }
+        MESH_GRID_LINES.lock().expect("Failed to lock MESH_GRID_LINES").replace(mesh_grid_lines);
+
 
         graphics.submit_transfer_commands(cmd_buf)?
             .wait(None)?;
 
+        temp_resources.clear();
         Ok(())
     }
 
     pub fn mesh_box_lines() -> Arc<Mesh<BaseVertex>> {
-        MESH_BOX_LINES.lock().expect("Failed to lock MESH_BOX_LINES").as_ref().unwrap().clone()
+        MESH_BOX_LINES.lock()
+            .expect("Failed to lock MESH_BOX_LINES")
+            .as_ref()
+            .expect("MESH_BOX_LINES is not initialized")
+            .clone()
     }
 
-    pub fn mesh_grid_32_lines() -> Arc<Mesh<BaseVertex>> {
-        MESH_GRID_32_LINES.lock().expect("Failed to lock MESH_BOX_LINES").as_ref().unwrap().clone()
+    pub fn mesh_grid_lines(dim: u32) -> Arc<Mesh<BaseVertex>> {
+        MESH_GRID_LINES.lock()
+            .expect("Failed to lock MESH_GRID_LINES")
+            .as_ref()
+            .expect("MESH_GRID_LINES is not initialized")
+            .get(&dim)
+            .expect(format!("MESH_GRID_LINES has no mesh for dimension {dim}").as_str())
+            .clone()
     }
 }

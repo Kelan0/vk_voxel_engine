@@ -87,6 +87,18 @@ impl AxisDirection {
         }
     }
 
+    pub fn opposite(&self) -> AxisDirection {
+        match *self {
+            AxisDirection::NegX => AxisDirection::PosX,
+            AxisDirection::PosX => AxisDirection::NegX,
+            AxisDirection::NegY => AxisDirection::PosY,
+            AxisDirection::PosY => AxisDirection::NegY,
+            AxisDirection::NegZ => AxisDirection::PosZ,
+            AxisDirection::PosZ => AxisDirection::NegZ,
+        }
+
+    }
+
     pub fn name(&self) -> &str {
         match *self {
             AxisDirection::NegX => "NegX",
