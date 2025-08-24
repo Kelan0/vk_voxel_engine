@@ -1729,7 +1729,12 @@ impl GraphicsManager {
 
             self.timestamp_query_results.resize(self.timestamp_query_pool.query_count() as usize, 0u64);
 
+            let t0 = Instant::now();
             self.timestamp_query_pool.get_results(0..self.current_timestamp_query_index, &mut self.timestamp_query_results, QueryResultFlags::WAIT)?;
+            let dur = t0.elapsed().as_secs_f64() * 1000.0;
+            if dur > 1.0 {
+                warn!("Took {dur} msec to read {} of {} GPU query pool results", self.current_timestamp_query_index, self.timestamp_query_results.len());
+            }
 
             let end_idx = (self.current_timestamp_query_index - 1) as usize;
 

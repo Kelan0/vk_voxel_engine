@@ -58,7 +58,7 @@ impl BoundingVolume for AxisAlignedBoundingBox {
 impl BoundingVolumeDebugDraw for AxisAlignedBoundingBox {
     fn draw_debug(&self, ctx: &mut DebugRenderContext) -> Result<()> {
         ctx.add_mesh(debug_mesh::mesh_box_lines(), *Transform::new()
-            .set_translation(self.center().as_vec3())
+            .set_translation(self.min_coord().as_vec3())
             .set_scale(self.extent().as_vec3()),
         U8Vec4::new(255, 200, 128, 255));
         Ok(())
@@ -89,10 +89,11 @@ pub trait BoundingVolumeDebugDraw {
 pub mod debug_mesh {
     use std::any::Any;
     use std::collections::HashMap;
-    use crate::core::{util, BaseVertex, GraphicsManager, Mesh, MeshData, MeshDataConfig, MeshPrimitiveType};
+    use crate::core::{util, AxisAlignedBoundingBox, AxisDirection, BaseVertex, BoundingVolume, GraphicsManager, Mesh, MeshData, MeshDataConfig, MeshPrimitiveType, Transform};
     use anyhow::Result;
     use lazy_static::lazy_static;
     use std::sync::{Arc, Mutex};
+    use glam::{DVec3, Vec3};
 
     lazy_static! {
         // dirty mutable global state...
@@ -105,7 +106,7 @@ pub mod debug_mesh {
         let mut cmd_buf = graphics.begin_transfer_commands()?;
 
         let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
-        mesh_data.create_cuboid_textured([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], util::f32_to_u16_norm([0.0, 0.0]), util::f32_to_u16_norm([1.0, 1.0]));
+        mesh_data.create_cuboid_textured([0.5, 0.5, 0.5], [0.5, 0.5, 0.5], util::f32_to_u16_norm([0.0, 0.0]), util::f32_to_u16_norm([1.0, 1.0]));
         mesh_data.colour_vertices(.., [255, 255, 255, 255]);
         let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
         let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
@@ -121,7 +122,7 @@ pub mod debug_mesh {
             let dim = 1 << i;
 
             let mut mesh_data = MeshData::<BaseVertex>::new(MeshDataConfig::new(MeshPrimitiveType::LineList));
-            mesh_data.create_lines_grid([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [dim, dim]);
+            mesh_data.create_lines_grid([0.5, 0.5, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0], [dim, dim]);
             mesh_data.colour_vertices(.., [255, 255, 255, 255]);
             let staging_buffer = mesh_data.create_staging_buffer(allocator.clone())?;
             let mesh = mesh_data.build_mesh_staged(allocator.clone(), &mut cmd_buf, &staging_buffer)?;
@@ -156,5 +157,41 @@ pub mod debug_mesh {
             .get(&dim)
             .expect(format!("MESH_GRID_LINES has no mesh for dimension {dim}").as_str())
             .clone()
+    }
+
+    pub fn mesh_grid_lines_transform(dir: AxisDirection, bounds: &AxisAlignedBoundingBox) -> Transform {
+        let size = bounds.extent().as_vec3();
+
+        match dir {
+            AxisDirection::NegX => *Transform::new()
+                .translate(bounds.min_coord().as_vec3())
+                .rotate_y(f32::to_radians(-90.0))
+                .scale(size),
+
+            AxisDirection::PosX => *Transform::new()
+                .translate(bounds.min_coord().as_vec3() + Vec3::X * size.x)
+                .rotate_y(f32::to_radians(-90.0))
+                .scale(size),
+
+            AxisDirection::NegY => *Transform::new()
+                .translate(bounds.min_coord().as_vec3())
+                .rotate_x(f32::to_radians(90.0))
+                .scale(size),
+
+            AxisDirection::PosY => *Transform::new()
+                .translate(bounds.min_coord().as_vec3() + Vec3::Y * size.y)
+                .rotate_x(f32::to_radians(90.0))
+                .scale(size),
+
+            AxisDirection::NegZ => *Transform::new()
+                .translate(bounds.min_coord().as_vec3())
+                // .rotate_y(f32::to_radians(0.0))
+                .scale(size),
+
+            AxisDirection::PosZ => *Transform::new()
+                .translate(bounds.min_coord().as_vec3() + Vec3::Z * size.z)
+                // .rotate_y(f32::to_radians(0.0))
+                .scale(size),
+        }
     }
 }

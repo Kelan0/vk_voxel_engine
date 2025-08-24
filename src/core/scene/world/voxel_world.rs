@@ -1,35 +1,69 @@
 
 pub mod world {
     use crate::application::Ticker;
-    use crate::core::scene::world::chunk_loader::ChunkLoader;
-    use crate::core::{debug_mesh, AxisAlignedBoundingBox, BaseVertex, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, Transform, WorldGenerator};
+    use crate::core::scene::world::chunk_manager::ChunkManager;
+    use crate::core::{debug_mesh, AxisAlignedBoundingBox, BoundingVolume, BoundingVolumeDebugDraw, CommandBuffer, DebugRenderContext, Engine, GraphicsManager, Mesh, MeshData, MeshPrimitiveType, RenderComponent, Transform, WorldGenerator};
     use crate::core::{AxisDirection, ChunkMesh, Material, MeshDataConfig, VoxelVertex};
     use crate::{function_name, profile_scope_fn};
     use anyhow::Result;
     use ash::vk::DeviceSize;
-    use foldhash::HashMap;
+    use foldhash::{HashMap, HashSet, HashSetExt};
     use foldhash::HashMapExt;
-    use glam::{DVec3, IVec3, U8Vec4, UVec3};
+    use glam::{DVec3, IVec3, U8Vec4, UVec3, Vec3};
     use log::{debug, info, warn};
     use std::collections::hash_map::{Iter, IterMut};
-    use std::sync::Arc;
+    use std::mem;
+    use std::ops::{Index, IndexMut};
+    use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use std::time::Instant;
+    use crate::core::world::chunk_manager::ChunkTaskResult;
 
-
-    pub const CHUNK_SIZE_EXP: u32 = 5;
+    pub const CHUNK_SIZE_EXP: u32 = 4;
     pub const CHUNK_SIZE: u32 = 1 << CHUNK_SIZE_EXP;
     pub const CHUNK_BOUNDS: UVec3 = UVec3::new(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     pub const CHUNK_BLOCK_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
-    pub const BITS_PER_BLOCK: usize = 1;
+    pub const BITS_PER_BLOCK: usize = 8;
+
+
     pub type ChunkBlockElement = u64;
     const BITS_PER_ELEMENT: usize = 8 * size_of::<ChunkBlockElement>();
     const BLOCK_ELEMENT_MASK: ChunkBlockElement = (1 << BITS_PER_BLOCK) - 1;
     const CHUNK_BLOCKS_ALLOC_LEN: usize = (CHUNK_BLOCK_COUNT * BITS_PER_BLOCK + (BITS_PER_ELEMENT - 1)) / BITS_PER_ELEMENT;
+    // type ChunkBlockElementList = [ChunkBlockElement; CHUNK_BLOCKS_ALLOC_LEN];
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+    struct ChunkBlockElementList {
+        array: [ChunkBlockElement; CHUNK_BLOCKS_ALLOC_LEN],
+    }
+
+    impl Default for ChunkBlockElementList {
+        fn default() -> Self {
+            Self {
+                array: [0; CHUNK_BLOCKS_ALLOC_LEN],
+            }
+        }
+    }
+
+    impl Index<usize> for ChunkBlockElementList {
+        type Output = ChunkBlockElement;
+
+        fn index(&self, index: usize) -> &Self::Output {
+            &self.array[index]
+        }
+    }
+    impl IndexMut<usize> for ChunkBlockElementList {
+        fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+            &mut self.array[index]
+        }
+    }
+
 
     // #[derive(Debug)]
     pub struct VoxelWorld {
         // chunks: Vec<VoxelChunk>,
-        loaded_chunks: HashMap<IVec3, VoxelChunkEntity>,
+        loaded_chunks: HashMap<IVec3, VoxelChunkData>,
+        changed_chunks: HashSet<IVec3>,
+        unloaded_chunks: Vec<VoxelChunkData>, // Unloaded chunks this frame
         requested_chunks: HashMap<IVec3, ChunkRequest>,
         chunk_unload_queue: Vec<IVec3>,
         chunk_load_center_pos: IVec3,
@@ -37,41 +71,68 @@ pub mod world {
         unloaded_block_edits: HashMap<IVec3, HashMap<UVec3, u32>>,
         chunk_load_radius: u32,
         max_async_chunks_per_frame: u32,
+        max_unload_chunks_per_frame: u32,
         world_generator: Arc<WorldGenerator>,
-        chunk_loader: ChunkLoader,
+        chunk_loader: ChunkManager,
 
         debug_info: DebugInfo,
     }
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone)]
     pub struct VoxelChunkData {
-        // entity: Entity<'static>,
         chunk_pos: IVec3,
-        blocks: Option<Box<[ChunkBlockElement; CHUNK_BLOCKS_ALLOC_LEN]>>,
-        // block_flags: [u8; CHUNK_BLOCK_COUNT],
-        dirty: bool,
+        stage: ChunkStage,
+        blocks: Option<Arc<RwLock<Box<ChunkBlockElementList>>>>,
+        blocks_changed: bool,
+        // changed_mesh: bool,
         block_count: u32,
-        pub updated_mesh_data: [Option<MeshData<VoxelVertex>>; 6],
+        pub updated_mesh_data: [Option<MeshData<VoxelVertex>>; 6], // This makes cloning the chunk too heavy, TODO put this on the heap/Arc
         pub chunk_mesh: [Option<ChunkMesh>; 6],
         updated_mesh: [bool; 6],
         bounds: [Option<AxisAlignedBoundingBox>; 6],
         unloaded_block_edits: HashMap<UVec3, u32>,
         has_mesh: bool,
         pub material: Option<Material>,
+        pub render_index: u32,
     }
 
-    pub struct VoxelChunkEntity {
-        entity_id: bevy_ecs::entity::Entity,
-        // entity_dir_id: [bevy_ecs::entity::Entity; 6],
-        chunk_data: Option<VoxelChunkData>,
+    #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq)]
+    pub enum ChunkStage {
+        NotGenerated,
+        NotMeshed,
+        Ready,
     }
 
     #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq)]
     enum ChunkRequest {
-        LoadRequested,
-        UnloadRequested,
-        LoadPending,
-        UnloadPending,
+        // LoadRequested,
+        // UnloadRequested,
+        // LoadPending,
+        // UnloadPending,
+        // UpdateMeshRequested,
+        // UpdateMeshPending,
+
+
+        Load{ state: ChunkRequestState },
+        Unload{ state: ChunkRequestState },
+        UpdateMesh{ state: ChunkRequestState },
+    }
+
+    #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq)]
+    enum ChunkRequestState {
+        Requested,
+        Pending,
+        Canceled,
+    }
+
+    impl ChunkRequest {
+        pub fn matches_state(&self, request_state: ChunkRequestState) -> bool {
+            match *self {
+                ChunkRequest::Load { state } => state == request_state,
+                ChunkRequest::Unload { state } => state == request_state,
+                ChunkRequest::UpdateMesh { state } => state == request_state,
+            }
+        }
     }
 
     #[derive(Default, Clone, Copy, Debug)]
@@ -102,19 +163,22 @@ pub mod world {
 
             let world_generator = Arc::new(world_generator);
 
-            let mut chunk_loader = ChunkLoader::new(world_generator.clone());
+            let mut chunk_loader = ChunkManager::new(world_generator.clone());
             chunk_loader.set_thread_count(12);
 
             VoxelWorld {
                 // chunks: vec![],
                 loaded_chunks: HashMap::new(),
+                changed_chunks: HashSet::new(),
+                unloaded_chunks: Vec::new(),
                 requested_chunks: HashMap::new(),
                 chunk_unload_queue: Vec::new(),
                 chunk_load_center_pos: IVec3::ZERO,
                 player_chunk_pos: IVec3::MAX,
                 unloaded_block_edits: HashMap::new(),
-                chunk_load_radius: 20,
+                chunk_load_radius: 30,
                 max_async_chunks_per_frame: 3000,
+                max_unload_chunks_per_frame: 1000,
                 world_generator,
                 chunk_loader,
 
@@ -133,18 +197,14 @@ pub mod world {
                 chunk_positions.push(*chunk_pos);
             }
 
-            let mut unloaded_chunks = vec![];
-
-            for chunk_pos in chunk_positions {
-                if let Some(chunk) = self.unload_chunk(engine, chunk_pos) {
-                    unloaded_chunks.push(chunk);
-                }
-            }
-
-            let mut ecs_cmd = engine.scene.ecs.commands();
-            for mut chunk in unloaded_chunks {
-                chunk.despawn(&mut ecs_cmd);
-            }
+            // TODO: why does this cause a gigantic slowdown upon exit? 2+mins to unload everything >:(
+            // let mut unloaded_chunks = vec![];
+            //
+            // for chunk_pos in chunk_positions {
+            //     if let Some(chunk) = self.unload_chunk(engine, chunk_pos) {
+            //         unloaded_chunks.push(chunk);
+            //     }
+            // }
         }
 
         pub fn draw_gui(&mut self, ticker: &mut Ticker, ctx: &egui::Context) {
@@ -185,90 +245,71 @@ pub mod world {
 
             profile_scope_fn!(&engine.frame_profiler);
 
+            // info!("Previous frame: {} changed chunks, {} unloaded chunks", self.changed_chunks.len(), self.unloaded_chunks.len());
+            self.changed_chunks.clear();
+            self.unloaded_chunks.clear();
+
             if !ticker.is_running() {
                 info!("Stopping ChunkLoader");
                 self.chunk_loader.stop_all(true);
             }
 
+            self.update_changed_chunks(engine)?;
             self.update_requested_chunks(engine)?;
             self.update_chunk_queues(engine)?;
             self.update_chunk_buffers(engine)?;
 
             self.chunk_loader.update();
 
-            // WorldGenerator::test_all();
-
-            // let mut count = 0;
-            // let mut max_staging_size = 0;
-            //
-            // for (_chunk_pos, chunk) in &mut self.loaded_chunks {
-            //     let chunk_data = chunk.chunk_data.as_ref().unwrap();
-            //     let staging_size = chunk_data.get_staging_buffer_size();
-            //     if staging_size > 0 {
-            //         count += 1;
-            //         max_staging_size = DeviceSize::max(max_staging_size, staging_size);
-            //     }
-            // }
-            //
-            // if max_staging_size > 0 {
-            //     let t0 = Instant::now();
-            //
-            //     let allocator = engine.graphics.memory_allocator();
-            //
-            //     let mut res: Vec<Arc<dyn Any>> = vec![];
-            //     let mut fences = vec![];
-            //
-            //     let mut stage_count = 0;
-            //     let mut staging_offset = 0;
-            //
-            //     let mut subbuffer: Option<Subbuffer<[u8]>> = None;
-            //     let mut staged_bytes = 0;
-            //
-            //     let mut iter = self.loaded_chunks.iter_mut();
-            //     while let Some((_chunk_pos, chunk)) = iter.next() {
-            //
-            //         let chunk_data = chunk.chunk_data.as_ref().unwrap();
-            //
-            //         if chunk_data.get_staging_buffer_size() == 0 {
-            //             continue;
-            //         }
-            //         let mut cmd_buf = engine.graphics.begin_transfer_commands()?;
-            //
-            //         if let Some(buf) = subbuffer.as_ref() {
-            //             if buf.size() < chunk_data.get_staging_buffer_size() {
-            //                 subbuffer = None;
-            //             }
-            //         }
-            //
-            //         if subbuffer.is_none() {
-            //             let staging_buffer = GraphicsManager::create_staging_subbuffer(allocator.clone(), max_staging_size * 3)?;
-            //             subbuffer = Some(staging_buffer.clone());
-            //             res.push(staging_buffer.buffer().clone());
-            //             stage_count += 1;
-            //             staged_bytes += staging_buffer.size();
-            //         }
-            //
-            //         staging_offset += chunk_data.get_staging_buffer_size();
-            //
-            //         chunk.update_buffers(&mut cmd_buf, &mut subbuffer, engine)?;
-            //
-            //         let fence = engine.graphics.submit_transfer_commands(cmd_buf)?;
-            //         fences.push(fence);
-            //     }
-            //
-            //     for fence in fences {
-            //         fence.wait(None)?
-            //     }
-            //
-            //     // let dur = t0.elapsed().as_secs_f64() * 1000.0;
-            //     // debug!("Updated {count} chunks in {dur} msec - staging size: {staged_bytes} bytes in {stage_count} uploads");
-            // }
-
-            // if ticker.time_since_last_dbg() > ticker.debug_interval() {
-            //     debug!("Player chunk pos: {}", self.player_chunk_pos);
-            //     debug!("World has {} loaded chunks, {} requested chunks, {} generation queued, {} meshing queued, {} unloads queued", self.loaded_chunks.len(), self.requested_chunks.len(), self.chunk_loader.chunk_generate_request_count(), self.chunk_loader.chunk_mesh_request_count(), self.chunk_unload_queue.len())
-            // }
+            if ticker.time_since_last_dbg() > ticker.debug_interval() {
+                debug!("Player chunk pos: {}", self.player_chunk_pos);
+                debug!("World has {} loaded chunks, {} requested chunks, {} generation queued, {} meshing queued, {} unloads queued", self.loaded_chunks.len(), self.requested_chunks.len(), self.chunk_loader.chunk_generate_request_count(), self.chunk_loader.chunk_mesh_request_count(), self.chunk_unload_queue.len())
+            }
             Ok(())
+        }
+
+        fn update_changed_chunks(&mut self, engine: &mut Engine) -> Result<()> {
+            profile_scope_fn!(&engine.frame_profiler);
+
+            // let mut n = 0;
+            // for (chunk_pos, chunk_data) in self.loaded_chunks.iter_mut() {
+            //     if chunk_data.blocks_changed {
+            //         ChunkLoader::build_chunk_mesh(chunk_data, Default::default());
+            //         self.changed_chunks.insert(*chunk_pos);
+            //         // self.chunk_loader.request_mesh_chunk(chunk_data.clone())?;
+            //         n += 1;
+            //     }
+            // }
+            //
+            // if n > 0 {
+            //     info!("{n} chunks with changed blocks");
+            // }
+
+            Ok(())
+        }
+
+        fn get_required_neighbour_positions_for_mesh(chunk_pos: IVec3, chunk_load_center_pos: IVec3, chunk_load_radius: u32, loaded_chunks: &HashMap<IVec3, VoxelChunkData>) -> Option<[Option<&VoxelChunkData>; 6]> {
+
+            let r2 = (chunk_load_radius * chunk_load_radius) as f64;
+
+            let mut neighbours: [Option<&VoxelChunkData>; 6] = Default::default();
+
+            for i in 0..6 {
+                let dir = AxisDirection::from_index(i).unwrap();
+                let neighbour_chunk_pos = chunk_pos + dir.ivec();
+                if distance_sq_between_chunks(neighbour_chunk_pos, chunk_load_center_pos) < r2 {
+                    if let Some(neighbour_chunk) = loaded_chunks.get(&neighbour_chunk_pos) {
+                        neighbours[i as usize] = Some(neighbour_chunk);
+                    } else {
+                        // Neighbour position is in-range, but not yet loaded. We cannot yet build chunk_pos mesh
+                        return None;
+                    }
+                } else {
+                    // Neighbour position is out-of-range, we allow the mesh to be generated without this neighbour
+                }
+            }
+
+            Some(neighbours)
         }
 
         /// Loop over the list of chunk requests in the last frame, and insert entries into the appropriate load
@@ -278,23 +319,45 @@ pub mod world {
             profile_scope_fn!(&engine.frame_profiler);
 
             let mut chunks_to_load = vec![];
+            let mut chunks_to_mesh = vec![];
+
             for (chunk_pos, request) in &mut self.requested_chunks {
 
-                if *request == ChunkRequest::LoadRequested {
-                    *request = ChunkRequest::LoadPending;
-                    chunks_to_load.push(*chunk_pos);
-
-                } else if *request == ChunkRequest::UnloadRequested {
-                    *request = ChunkRequest::UnloadPending;
-                    self.chunk_unload_queue.push(*chunk_pos);
+                match request {
+                    ChunkRequest::Load { state } if *state == ChunkRequestState::Requested => {
+                        *state = ChunkRequestState::Pending;
+                        chunks_to_load.push(*chunk_pos);
+                    }
+                    ChunkRequest::Unload { state } if *state == ChunkRequestState::Requested => {
+                        *state = ChunkRequestState::Pending;
+                        self.chunk_unload_queue.push(*chunk_pos);
+                    }
+                    ChunkRequest::UpdateMesh { state } if *state == ChunkRequestState::Requested => {
+                        // if chunks_to_mesh.len() < 300 {
+                            if let Some(chunk_data) = self.loaded_chunks.get(chunk_pos) {
+                                if let Some(neighbours) = Self::get_required_neighbour_positions_for_mesh(*chunk_pos, self.chunk_load_center_pos, self.chunk_load_radius, &self.loaded_chunks) {
+                                    *state = ChunkRequestState::Pending;
+                                    chunks_to_mesh.push((chunk_data.clone(), neighbours));
+                                }
+                            }
+                        // }
+                    }
+                    _ => {}
                 }
             }
 
             let t0 = Instant::now();
-            self.chunk_loader.request_generate_chunks(chunks_to_load)?;
+            self.chunk_loader.request_generate_chunks(&chunks_to_load)?;
             let dur = t0.elapsed().as_secs_f64() * 1000.0;
             if dur > 2.0 {
-                warn!("request_load_chunks blocked for {dur} msec");
+                warn!("request_load_chunks blocked for {dur} msec ({} requests)", chunks_to_load.len());
+            }
+
+            let t0 = Instant::now();
+            self.chunk_loader.request_mesh_chunks(&chunks_to_mesh)?;
+            let dur = t0.elapsed().as_secs_f64() * 1000.0;
+            if dur > 2.0 {
+                warn!("request_mesh_chunks blocked for {dur} msec ({} requests)", chunks_to_mesh.len());
             }
 
             let mut num_completed = 0;
@@ -308,19 +371,39 @@ pub mod world {
                 num_canceled += 1;
             })?;
 
-            self.chunk_loader.drain_completed_chunks(self.max_async_chunks_per_frame as usize, |chunk| {
-                let chunk_pos = chunk.chunk_pos;
-                self.loaded_chunks.insert(chunk_pos, VoxelChunkEntity::load(chunk, engine));
-                self.requested_chunks.remove(&chunk_pos);
+            self.chunk_loader.drain_completed_chunks(self.max_async_chunks_per_frame as usize, |mut result| {
+                match result {
+                    ChunkTaskResult::GenerateVoxels { chunk_data } => {
+                        let chunk_pos = *chunk_data.chunk_pos();
+                        self.loaded_chunks.insert(chunk_pos, chunk_data);
+                        // self.changed_chunks.insert(chunk_pos);
+                        self.requested_chunks.entry(chunk_pos).insert_entry(ChunkRequest::UpdateMesh { state: ChunkRequestState::Requested });
+                    }
+                    ChunkTaskResult::GenerateMesh { chunk_data } => {
+                        let chunk_pos = *chunk_data.chunk_pos();
+                        self.loaded_chunks.insert(chunk_pos, chunk_data);
+                        self.changed_chunks.insert(chunk_pos);
+                        self.requested_chunks.remove(&chunk_pos);
+
+                    }
+                }
+                // chunk.notify_mesh_changed();
+
+
+                // let chunk_pos = *result.chunk_pos();
+                // self.loaded_chunks.insert(chunk_pos, result);
+                // self.changed_chunks.insert(chunk_pos);
+                // self.requested_chunks.remove(&chunk_pos);
+
                 num_completed += 1;
             })?;
 
             if num_completed > 0 || num_canceled > 0 {
-                // let dur = t0.elapsed().as_secs_f64() * 1000.0;
-                // if dur > 2.0 {
-                let remaining_completed = self.chunk_loader.num_completed_chunks().unwrap();
-                warn!("ChunkLoader drained {num_completed} of {remaining_completed} completed chunks, {num_canceled} canceled chunks - Took {dur} msec");
-                // }
+                let dur = t0.elapsed().as_secs_f64() * 1000.0;
+                if dur > 2.0 {
+                    let remaining_completed = num_completed + self.chunk_loader.num_completed_chunks().unwrap();
+                    warn!("ChunkLoader drained {num_completed} of {remaining_completed} completed chunks, {num_canceled} canceled chunks - Took {dur} msec");
+                }
             }
 
             Ok(())
@@ -350,9 +433,7 @@ pub mod world {
                 })
             }
 
-            let mut unloaded_chunks = vec![];
-
-            for _ in 0..100 {
+            for _ in 0..self.max_unload_chunks_per_frame {
                 if self.chunk_unload_queue.is_empty() {
                     break;
                 }
@@ -361,18 +442,10 @@ pub mod world {
                 // debug!("Unloading chunk {chunk_pos}");
                 if !self.is_chunk_load_requested(&chunk_pos) || chunk_pos.as_dvec3().distance_squared(center_pos) >= self.chunk_load_radius as f64 {
 
-                    if let Some(mut chunk) = self.unload_chunk(engine, chunk_pos) {
-                        unloaded_chunks.push(chunk);
-                    }
+                    self.unload_chunk(engine, chunk_pos);
                 }
 
                 self.requested_chunks.remove(&chunk_pos);
-            }
-
-            let mut ecs_cmd = engine.scene.ecs.commands();
-
-            for mut chunk in unloaded_chunks {
-                chunk.despawn(&mut ecs_cmd);
             }
 
             Ok(())
@@ -397,6 +470,94 @@ pub mod world {
 
                 self.load_chunks_in_radius(chunk_pos, self.chunk_load_radius as i32);
                 self.unload_chunks_outside_radius(chunk_pos, self.chunk_load_radius as i32);
+            }
+        }
+
+        pub fn ray_cast_block<F>(&self, ray_world_pos: DVec3, ray_dir: DVec3, mut f: F, max_steps: u32)
+        where F: FnMut(IVec3, AxisDirection, f64) -> bool {
+
+            fn sign(x: f64) -> i32 {
+                if x > 0.0 { 1 } else if x < 0.0 { -1 } else { 0 }
+            }
+            fn intbound(x: f64, dx: f64) -> f64 {
+                if dx < 0.0 && f64::abs(x.round() - x) < 1e-10 {
+                    return 0.0
+                }
+                if dx > 0.0 {
+                    (x.ceil() - x) / dx.abs()
+                } else {
+                    (x - x.floor()) / dx.abs()
+                }
+            }
+
+            let step = IVec3::new(
+                sign(ray_dir.x),
+                sign(ray_dir.y),
+                sign(ray_dir.z)
+            );
+
+            let face_step_x = if step.x > 0 { AxisDirection::NegX } else { AxisDirection::PosX };
+            let face_step_y = if step.y > 0 { AxisDirection::NegY } else { AxisDirection::PosY };
+            let face_step_z = if step.z > 0 { AxisDirection::NegZ } else { AxisDirection::PosZ };
+
+            if (step.x | step.y | step.z) == 0 {
+                // Zero-direction, we cannot step
+                return;
+            }
+
+            let mut t_max = DVec3::new(
+                intbound(ray_world_pos.x, ray_dir.x),
+                intbound(ray_world_pos.y, ray_dir.y),
+                intbound(ray_world_pos.z, ray_dir.z),
+            );
+
+            let dt = step.as_dvec3() / ray_dir;
+
+            let mut block_pos = get_block_pos_for_world_pos(ray_world_pos);
+
+            // The first step is inside a block instead of at the step boundaries.
+            if f(block_pos, AxisDirection::from_dvec(t_max).unwrap_or(AxisDirection::NegX), 0.0) {
+                return;
+            }
+
+            let mut step_count = 0;
+            while step_count < max_steps {
+                step_count += 1;
+
+                if t_max.x < t_max.y {
+                    if t_max.x < t_max.z {
+                        // x < y < z // The closest voxel boundary is in the x-direction
+                        block_pos.x += step.x;
+                        if f(block_pos, face_step_x, t_max.x) { // if t_max.x > max_distance {
+                            break;
+                        }
+                        t_max.x += dt.x;
+
+                    } else {
+                        // z < x < y // The closest voxel boundary is in the z-direction
+                        block_pos.z += step.z;
+                        if f(block_pos, face_step_z, t_max.z) { // if t_max.z > max_distance {
+                            break;
+                        }
+                        t_max.z += dt.z;
+                    }
+                } else {
+                    if t_max.y < t_max.z {
+                        // y < z < x // The closest voxel boundary is in the y-direction
+                        block_pos.y += step.y;
+                        if f(block_pos, face_step_y, t_max.y) { // if t_max.y > max_distance {
+                            break;
+                        }
+                        t_max.y += dt.y;
+                    } else {
+                        // z < y < x // The closest voxel boundary is in the z-direction
+                        block_pos.z += step.z;
+                        if f(block_pos, face_step_z, t_max.z) { // if t_max.z > max_distance {
+                            break;
+                        }
+                        t_max.z += dt.z;
+                    }
+                }
             }
         }
 
@@ -454,25 +615,31 @@ pub mod world {
             }
         }
 
-        fn unload_chunk(&mut self, engine: &mut Engine, chunk_pos: IVec3) -> Option<VoxelChunkEntity> {
+        fn unload_chunk(&mut self, engine: &mut Engine, chunk_pos: IVec3) -> Option<VoxelChunkData> {
             if let Some(mut chunk) = self.loaded_chunks.remove(&chunk_pos) {
                 // engine.scene.destroy_entity(chunk.entity_id);
                 chunk.unload(engine);
-                chunk.chunk_data = None;
+                self.unloaded_chunks.push(chunk.clone());
                 return Some(chunk);
             }
             None
         }
 
+        pub fn request_mesh_chunk(&mut self, chunk_pos: IVec3) {
+            if self.is_chunk_loaded(chunk_pos) && !self.is_chunk_mesh_pending(&chunk_pos) {
+                self.requested_chunks.insert(chunk_pos, ChunkRequest::UpdateMesh { state: ChunkRequestState::Requested });
+            }
+        }
+
         pub fn request_load_chunk(&mut self, chunk_pos: IVec3) {
             if !self.is_chunk_loaded(chunk_pos) && !self.is_chunk_load_pending(&chunk_pos) {
-                self.requested_chunks.insert(chunk_pos, ChunkRequest::LoadRequested);
+                self.requested_chunks.insert(chunk_pos, ChunkRequest::Load { state: ChunkRequestState::Requested });
             }
         }
 
         pub fn request_unload_chunk(&mut self, chunk_pos: IVec3) {
             if self.is_chunk_loaded(chunk_pos) && !self.is_chunk_unload_pending(&chunk_pos) {
-                self.requested_chunks.insert(chunk_pos, ChunkRequest::UnloadRequested);
+                self.requested_chunks.insert(chunk_pos, ChunkRequest::Unload { state: ChunkRequestState::Requested });
             }
         }
 
@@ -481,49 +648,151 @@ pub mod world {
         }
 
         fn is_chunk_load_requested(&self, chunk_pos: &IVec3) -> bool {
-            self.get_chunk_request(chunk_pos).map_or(false, |req| *req == ChunkRequest::LoadRequested || *req == ChunkRequest::LoadPending)
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::Load { state } if *state == ChunkRequestState::Requested || *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
         }
 
         fn is_chunk_load_pending(&self, chunk_pos: &IVec3) -> bool {
-            self.get_chunk_request(chunk_pos).map_or(false, |req| *req == ChunkRequest::LoadPending)
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::Load { state } if *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
         }
 
         fn is_chunk_unload_requested(&self, chunk_pos: &IVec3) -> bool {
-            self.get_chunk_request(chunk_pos).map_or(false, |req| *req == ChunkRequest::UnloadRequested || *req == ChunkRequest::UnloadPending)
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::Unload { state } if *state == ChunkRequestState::Requested || *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
         }
 
         fn is_chunk_unload_pending(&self, chunk_pos: &IVec3) -> bool {
-            self.get_chunk_request(chunk_pos).map_or(false, |req| *req == ChunkRequest::UnloadPending)
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::Unload { state } if *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
+        }
+
+        fn is_chunk_mesh_requested(&self, chunk_pos: &IVec3) -> bool {
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::UpdateMesh { state } if *state == ChunkRequestState::Requested || *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
+        }
+
+        fn is_chunk_mesh_pending(&self, chunk_pos: &IVec3) -> bool {
+            self.get_chunk_request(chunk_pos).map_or(false, |req| {
+                match req {
+                    ChunkRequest::UpdateMesh { state } if *state == ChunkRequestState::Pending => true,
+                    _ => false
+                }
+            })
         }
 
         pub fn is_chunk_loaded(&self, chunk_pos: IVec3) -> bool {
             self.loaded_chunks.contains_key(&chunk_pos)
         }
 
-        pub fn for_each_loaded_chunk<F>(&mut self, mut f: F)
-        where F: FnMut(&IVec3, &VoxelChunkEntity) {
-            self.loaded_chunks.iter().for_each(|(chunk_pos, chunk)| {
-                f(chunk_pos, chunk);
-            });
-        }
 
-        pub fn loaded_chunks(&self) -> Iter<'_, IVec3, VoxelChunkEntity> {
+        pub fn loaded_chunks(&self) -> Iter<'_, IVec3, VoxelChunkData> {
             self.loaded_chunks.iter()
         }
 
-        pub fn loaded_chunks_mut(&mut self) -> IterMut<'_, IVec3, VoxelChunkEntity> {
+        pub fn loaded_chunks_mut(&mut self) -> IterMut<'_, IVec3, VoxelChunkData> {
             self.loaded_chunks.iter_mut()
+        }
+
+        pub fn for_each_loaded_chunks<F>(&self, mut f: F)
+        where F: FnMut(&VoxelChunkData) {
+            self.loaded_chunks.iter().for_each(|(_chunk_pos, chunk_data)| {
+                f(chunk_data)
+            })
+        }
+
+        pub fn for_each_loaded_chunks_mut<F>(&mut self, mut f: F)
+        where F: FnMut(&mut VoxelChunkData) {
+            self.loaded_chunks.iter_mut().for_each(|(_chunk_pos, chunk_data)| {
+                f(chunk_data)
+            })
         }
 
         pub fn loaded_chunks_count(&self) -> usize {
             self.loaded_chunks.len()
         }
 
-        pub fn has_chunks_unloaded(&self) -> bool {
-            false
+        pub fn for_each_changed_chunks<F>(&self, mut f: F)
+        where F: FnMut(&VoxelChunkData) {
+            for chunk_pos in self.changed_chunks.iter() {
+                if let Some(chunk_data) = self.loaded_chunks.get(&chunk_pos) {
+                    f(chunk_data);
+                }
+            }
+
+            // self.for_each_loaded_chunks(|chunk_data| {
+            //     if chunk_data.changed_mesh {
+            //         f(chunk_data);
+            //     }
+            // });
+        }
+        pub fn for_each_changed_chunks_mut<F>(&mut self, mut f: F)
+        where F: FnMut(&mut VoxelChunkData) {
+            for chunk_pos in self.changed_chunks.iter() {
+                if let Some(chunk_data) = self.loaded_chunks.get_mut(&chunk_pos) {
+                    f(chunk_data);
+                }
+            }
+            // self.for_each_loaded_chunks_mut(|chunk_data| {
+            //     if chunk_data.changed_mesh {
+            //         f(chunk_data);
+            //     }
+            // });
         }
 
-        pub fn get_chunk(&self, chunk_pos: IVec3) -> Option<&VoxelChunkEntity> {
+        // pub fn changed_chunks(&self) -> Iter<'_, IVec3, VoxelChunkData> {
+        //     self.changed_chunks.iter()
+        // }
+        //
+        // pub fn changed_chunks_mut(&mut self) -> IterMut<'_, IVec3, VoxelChunkData> {
+        //     self.changed_chunks.iter_mut()
+        // }
+
+        pub fn changed_chunks_count(&self) -> usize {
+            0 //self.changed_chunks.len()
+        }
+
+        pub fn unloaded_chunks(&self) -> std::slice::Iter<'_, VoxelChunkData> {
+            self.unloaded_chunks.iter()
+        }
+
+        pub fn unloaded_chunks_mut(&mut self) -> std::slice::IterMut<'_, VoxelChunkData> {
+            self.unloaded_chunks.iter_mut()
+        }
+
+        pub fn unloaded_chunks_count(&self) -> usize {
+            self.unloaded_chunks.len()
+        }
+
+        pub fn notify_chunk_mesh_changed(&mut self, chunk_pos: &IVec3) {
+            self.changed_chunks.insert(*chunk_pos);
+
+            // if let Some(chunk_data) = self.loaded_chunks.get_mut(chunk_pos) {
+            //     chunk_data.notify_mesh_changed();
+            // }
+        }
+
+        pub fn get_chunk(&self, chunk_pos: IVec3) -> Option<&VoxelChunkData> {
             // let index = self.loaded_chunks.get(&chunk_pos)?;
             // let chunk = self.chunks.get(*index)?;
             // Some(chunk)
@@ -531,7 +800,7 @@ pub mod world {
             self.loaded_chunks.get(&chunk_pos)
         }
 
-        pub fn get_chunk_mut(&mut self, chunk_pos: IVec3) -> Option<&mut VoxelChunkEntity> {
+        pub fn get_chunk_mut(&mut self, chunk_pos: IVec3) -> Option<&mut VoxelChunkData> {
             // let index = self.loaded_chunks.get(&chunk_pos)?;
             // let chunk = self.chunks.get_mut(*index)?;
             // Some(chunk)
@@ -562,7 +831,7 @@ pub mod world {
 
         pub fn draw_debug(&self, ctx: &mut DebugRenderContext) -> Result<()> {
             for (_chunk_pos, chunk) in self.loaded_chunks.iter() {
-                if chunk.chunk_data().block_count > 0 {
+                if chunk.block_count > 0 {
                     chunk.draw_debug_bounds(ctx)?;
                 }
             }
@@ -576,87 +845,6 @@ pub mod world {
     }
 
 
-
-    impl VoxelChunkEntity {
-        fn load(chunk_data: VoxelChunkData, engine: &mut Engine) -> Self {
-            let chunk_pos = *chunk_data.chunk_pos();
-            let pos = get_chunk_world_pos(chunk_pos);
-
-            let mut entity = engine.scene.create_entity(format!("chunk({},{},{})", chunk_pos.x, chunk_pos.y, chunk_pos.z).as_str());
-
-            VoxelChunkEntity {
-                entity_id: entity.id().id(),
-                // entity_dir_id,
-                chunk_data: Some(chunk_data)
-            }
-        }
-
-        fn update_render_component(&mut self, engine: &mut Engine) {
-            let chunk_data = self.chunk_data.as_mut().unwrap();
-
-            // chunk_data.has_mesh = false;
-            for i in 0..6 {
-                if chunk_data.updated_mesh[i] {
-                    chunk_data.has_mesh = true;
-                }
-            }
-        }
-
-        fn unload(&mut self, engine: &mut Engine, ) {
-
-            if let Some(mut chunk_data) = self.chunk_data.take() {
-                for i in 0..6 {
-                    if let Some(chunk_mesh) = chunk_data.chunk_mesh[i].take() {
-                        engine.voxel_renderer.unload_chunk_mesh(chunk_mesh)
-                    }
-                }
-                chunk_data.deallocate()
-            }
-        }
-
-        fn despawn(&mut self, ecs_cmd: &mut bevy_ecs::system::Commands) {
-            ecs_cmd.entity(self.entity_id).despawn();
-            // engine.scene.destroy_entity(self.entity_id);
-        }
-
-        // fn update_mesh_data(&mut self) -> Result<()>{
-        //     self.chunk_data.update_mesh_data()
-        // }
-
-        pub fn get_block(&self, pos: UVec3) -> u32 {
-            self.chunk_data().get_block(pos)
-        }
-
-        pub fn set_block(&mut self, pos: UVec3, block: u32) {
-            self.chunk_data_mut().set_block(pos, block)
-        }
-
-        pub fn draw_debug_bounds(&self, ctx: &mut DebugRenderContext) -> Result<()> {
-            self.chunk_data().draw_debug_bounds(ctx)
-        }
-
-        pub fn draw_debug_grid(&self, ctx: &mut DebugRenderContext) -> Result<()> {
-            self.chunk_data().draw_debug_grid(ctx)
-        }
-
-        pub fn chunk_data(&self) -> &VoxelChunkData {
-            self.chunk_data.as_ref().unwrap()
-        }
-
-        pub fn chunk_data_mut(&mut self) -> &mut VoxelChunkData {
-            self.chunk_data.as_mut().unwrap()
-        }
-
-        pub fn chunk_pos(&self) -> &IVec3 {
-            self.chunk_data().chunk_pos()
-        }
-
-        pub fn world_transform(&self) -> Transform {
-            let chunk_pos = *self.chunk_pos();
-            let pos = get_chunk_world_pos(chunk_pos);
-            *Transform::new().set_translation(pos.as_vec3())
-        }
-    }
 
 
     impl VoxelChunkData {
@@ -674,10 +862,12 @@ pub mod world {
 
             VoxelChunkData {
                 chunk_pos,
+                stage: ChunkStage::NotGenerated,
                 blocks: None,
                 // block_flags: [0; CHUNK_BLOCK_COUNT],
                 block_count: 0,
-                dirty: true,
+                blocks_changed: false,
+                // changed_mesh: true,
                 updated_mesh_data: Default::default(), // [None; 6]
                 chunk_mesh: Default::default(), // [None; 6]
                 updated_mesh: Default::default(), // [None; 6]
@@ -685,11 +875,36 @@ pub mod world {
                 unloaded_block_edits: HashMap::new(),
                 has_mesh: false,
                 material: None,
+                render_index: u32::MAX,
+            }
+        }
+
+        pub fn new_stage(mut chunk_data: VoxelChunkData, stage: ChunkStage) -> Self {
+            VoxelChunkData {
+                chunk_pos: mem::take(&mut chunk_data.chunk_pos),
+                stage,
+                blocks: mem::take(&mut chunk_data.blocks),
+                block_count: mem::take(&mut chunk_data.block_count),
+                blocks_changed: mem::take(&mut chunk_data.blocks_changed),
+                updated_mesh_data: mem::take(&mut chunk_data.updated_mesh_data),
+                chunk_mesh: mem::take(&mut chunk_data.chunk_mesh),
+                updated_mesh: mem::take(&mut chunk_data.updated_mesh),
+                bounds: mem::take(&mut chunk_data.bounds),
+                unloaded_block_edits: mem::take(&mut chunk_data.unloaded_block_edits),
+                has_mesh: mem::take(&mut chunk_data.has_mesh),
+                material: mem::take(&mut chunk_data.material),
+                render_index: mem::take(&mut chunk_data.render_index),
             }
         }
 
         pub fn chunk_pos(&self) -> &IVec3 {
             &self.chunk_pos
+        }
+
+        pub fn world_transform(&self) -> Transform {
+            let chunk_pos = *self.chunk_pos();
+            let pos = get_chunk_world_pos(chunk_pos);
+            *Transform::new().set_translation(pos.as_vec3())
         }
 
         // pub fn mesh(&self, dir: AxisDirection) -> Option<&Arc<Mesh<VoxelVertex>>> {
@@ -703,10 +918,20 @@ pub mod world {
             (index, offset)
         }
 
+        fn read_blocks(&self) -> RwLockReadGuard<'_, Box<ChunkBlockElementList>> {
+            let blocks = self.blocks.as_ref().unwrap().read().unwrap();
+            blocks
+        }
+
+        fn write_blocks(&mut self) -> RwLockWriteGuard<'_, Box<ChunkBlockElementList>> {
+            let blocks = self.blocks.as_ref().unwrap().write().unwrap();
+            blocks
+        }
+
         fn read_block(&self, block_index: u32) -> u32 {
             let (index, offset) = Self::calc_block_elem_index_and_offset(block_index);
 
-            let blocks = self.blocks.as_ref().unwrap();
+            let blocks = self.read_blocks();
 
             let block = if offset + BITS_PER_BLOCK > BITS_PER_ELEMENT {
                 // boundary
@@ -721,8 +946,7 @@ pub mod world {
                 (elem1 | (elem2 << num_bits1)) as u32
             } else {
 
-                let mask = (1 << BITS_PER_BLOCK) - 1;
-                ((blocks[index] >> offset) & mask) as u32
+                ((blocks[index] >> offset) & BLOCK_ELEMENT_MASK) as u32
             };
 
             block
@@ -731,14 +955,14 @@ pub mod world {
         fn write_block(&mut self, block_index: u32, block: u32) {
             let (index, offset) = Self::calc_block_elem_index_and_offset(block_index);
 
-            let blocks = self.blocks.as_mut().unwrap();
+            let mut blocks = self.write_blocks();
 
             if offset + BITS_PER_BLOCK > BITS_PER_ELEMENT {
                 // boundary
                 let num_bits1 = BITS_PER_ELEMENT - offset;
                 let num_bits2 = BITS_PER_BLOCK - num_bits1;
-                let mask1 = (1 << num_bits1) - 1;
-                let mask2 = (1 << num_bits2) - 1;
+                let mask1 = ((1 as ChunkBlockElement) << num_bits1) - 1;
+                let mask2 = ((1 as ChunkBlockElement) << num_bits2) - 1;
 
                 blocks[index] &= !(mask1 << offset) as ChunkBlockElement;
                 blocks[index] |= ((block as ChunkBlockElement & mask1) << offset) as ChunkBlockElement;
@@ -748,9 +972,8 @@ pub mod world {
 
             } else {
 
-                let mask = ((1 << BITS_PER_BLOCK) - 1) as ChunkBlockElement;
-                blocks[index] &= !(mask << offset) as ChunkBlockElement;
-                blocks[index] |= ((block as ChunkBlockElement & mask) << offset) as ChunkBlockElement;
+                blocks[index] &= !(BLOCK_ELEMENT_MASK << offset) as ChunkBlockElement;
+                blocks[index] |= ((block as ChunkBlockElement & BLOCK_ELEMENT_MASK) << offset) as ChunkBlockElement;
             };
         }
 
@@ -787,7 +1010,7 @@ pub mod world {
                     }
                 }
 
-                self.dirty = true;
+                self.blocks_changed = true;
             }
         }
 
@@ -809,6 +1032,7 @@ pub mod world {
 
                     if !prev_is_solid && is_solid {
                         self.block_count += 1;
+
                     } else if prev_is_solid && !is_solid {
                         self.block_count -= 1;
                     }
@@ -819,26 +1043,45 @@ pub mod world {
                 if self.block_count == 0 {
                     self.deallocate();
                 }
-                self.dirty = true;
+                self.blocks_changed = true;
             }
         }
 
 
         fn allocate(&mut self) {
-            self.blocks = Some(Box::new([0; CHUNK_BLOCKS_ALLOC_LEN]))
+            self.blocks = Some(Arc::new(RwLock::new(Box::new(Default::default()))))
         }
 
         fn deallocate(&mut self) {
             self.blocks = None;
         }
 
+        fn unload(&mut self, engine: &mut Engine) {
+
+            for i in 0..6 {
+                if let Some(chunk_mesh) = self.chunk_mesh[i].take() {
+                    engine.voxel_renderer.unload_chunk_mesh(chunk_mesh)
+                }
+            }
+            self.deallocate()
+        }
+
         pub fn is_allocated(&self) -> bool {
             self.blocks.is_some()
         }
 
+
+        fn update_render_component(&mut self, _engine: &mut Engine) {
+            for i in 0..6 {
+                if self.updated_mesh[i] {
+                    self.has_mesh = true;
+                }
+            }
+        }
+
         pub fn update_mesh_data(&mut self, neighbours: [Option<VoxelChunkData>; 6]) -> Result<()> {
-            if self.dirty {
-                self.dirty = false;
+            if self.blocks_changed {
+                self.blocks_changed = false;
 
                 // let mut mesh_data = MeshData::<BaseVertex>::new(MeshPrimitiveType::TriangleList);
                 let mut mesh_data_neg_x = MeshData::<VoxelVertex>::new(MeshDataConfig::new(MeshPrimitiveType::TriangleList));
@@ -1091,12 +1334,17 @@ pub mod world {
             self.has_mesh
         }
 
-        pub fn update_mesh(&self, axis_index: u32) -> bool {
+        pub fn updated_mesh(&self, axis_index: u32) -> bool {
             self.updated_mesh[axis_index as usize]
         }
 
-        pub fn notify_mesh_updated(&mut self, axis_index: u32) {
+        pub fn notify_mesh_upload_complete(&mut self, axis_index: u32) {
             self.updated_mesh[axis_index as usize] = false;
+        }
+
+        pub fn notify_mesh_changed(&mut self) {
+            panic!("notify_mesh_changed")
+            // self.changed_mesh = true;
         }
 
         fn get_staging_buffer_size(&self) -> DeviceSize {
@@ -1134,34 +1382,12 @@ pub mod world {
             let h = bounds.half_extent();
             let colour = U8Vec4::new(255, 0, 0, 100);
 
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() + DVec3::X * h.x).as_vec3())
-                .rotate_y(f32::to_radians(90.0))
-                .scale(bounds.extent().as_vec3()), colour);
-
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() - DVec3::X * h.x).as_vec3())
-                .rotate_y(f32::to_radians(90.0))
-                .scale(bounds.extent().as_vec3()), colour);
-
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() + DVec3::Y * h.y).as_vec3())
-                .rotate_x(f32::to_radians(90.0))
-                .scale(bounds.extent().as_vec3()), colour);
-
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() - DVec3::Y * h.y).as_vec3())
-                .rotate_x(f32::to_radians(90.0))
-                .scale(bounds.extent().as_vec3()), colour);
-
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() + DVec3::Z * h.z).as_vec3())
-                .scale(bounds.extent().as_vec3()), colour);
-
-            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), *Transform::new()
-                .translate((bounds.center() - DVec3::Z * h.z).as_vec3())
-                .scale(bounds.extent().as_vec3()), colour);
-
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::NegX, &bounds), colour);
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::PosX, &bounds), colour);
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::NegY, &bounds), colour);
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::PosY, &bounds), colour);
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::NegZ, &bounds), colour);
+            ctx.add_mesh(debug_mesh::mesh_grid_lines(CHUNK_SIZE), debug_mesh::mesh_grid_lines_transform(AxisDirection::PosZ, &bounds), colour);
 
             Ok(())
         }
@@ -1173,23 +1399,14 @@ pub mod world {
         }
 
         pub fn block_count(&self) -> u32 {
-            // self.block_count
-            0
+            self.block_count
+            // 0
         }
     }
 
     impl Drop for VoxelChunkData {
         fn drop(&mut self) {
             self.deallocate();
-        }
-    }
-
-    impl Drop for VoxelChunkEntity {
-        fn drop(&mut self) {
-            if let Some(chunk_data) = self.chunk_data.as_ref() {
-                debug_assert!(chunk_data.is_allocated(), "VoxelChunkEntity was not deallocated before being dropped")
-            }
-            // debug!("Dropping chunk: {:?}", self.chunk_pos);
         }
     }
 

@@ -2,7 +2,7 @@ use crate::core::{set_vulkan_debug_name, util, AxisAlignedBoundingBox, CommandBu
 use anyhow::Result;
 use ash::vk::DeviceSize;
 use glam::{Affine3A, DVec3, IVec3, Mat4, Vec3};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::Arc;
 use vulkano::buffer::Subbuffer;
@@ -21,6 +21,92 @@ pub struct MeshData<V: Vertex> {
     has_indices: bool,
 }
 
+pub enum Axis {
+    X, Y, Z
+}
+
+impl Axis {
+    pub fn from_index(index: u32) -> Option<Axis> {
+        match index {
+            0 => Some(Axis::X),
+            1 => Some(Axis::Y),
+            2 => Some(Axis::Z),
+            _ => None
+        }
+    }
+
+    pub fn index(&self) -> u32 {
+        match *self {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        }
+    }
+
+    pub fn axis_sign_vec(vec: Vec3) -> (Axis, i32) {
+        let abs_vec = vec.abs();
+
+        let mut val = vec.x;
+        let mut max = abs_vec.x;
+        let mut axis = Axis::X;
+        if abs_vec.y > max {
+            max = abs_vec.y;
+            val = vec.y;
+            axis = Axis::Y;
+        }
+        if abs_vec.z > max {
+            val = vec.z;
+            axis = Axis::Z;
+        }
+
+        let sign = if val < 0.0 { -1 } else if val > 0.0 { 1 } else { 0 };
+
+        (axis, sign)
+    }
+
+    pub fn axis_sign_dvec(vec: DVec3) -> (Axis, i32) {
+        let abs_vec = vec.abs();
+
+        let mut val = vec.x;
+        let mut max = abs_vec.x;
+        let mut axis = Axis::X;
+        if abs_vec.y > max {
+            max = abs_vec.y;
+            val = vec.y;
+            axis = Axis::Y;
+        }
+        if abs_vec.z > max {
+            val = vec.z;
+            axis = Axis::Z;
+        }
+
+        let sign = if val < 0.0 { -1 } else if val > 0.0 { 1 } else { 0 };
+
+        (axis, sign)
+    }
+
+    pub fn axis_sign_ivec(vec: IVec3) -> (Axis, i32) {
+        let abs_vec = vec.abs();
+
+        let mut val = vec.x;
+        let mut max = abs_vec.x;
+        let mut axis = Axis::X;
+        if abs_vec.y > max {
+            max = abs_vec.y;
+            val = vec.y;
+            axis = Axis::Y;
+        }
+        if abs_vec.z > max {
+            val = vec.z;
+            axis = Axis::Z;
+        }
+
+        let sign = if val < 0 { -1 } else if val > 0 { 1 } else { 0 };
+
+        (axis, sign)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisDirection {
     NegX,
@@ -29,6 +115,19 @@ pub enum AxisDirection {
     PosY,
     NegZ,
     PosZ,
+}
+
+impl Display for AxisDirection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            AxisDirection::NegX => write!(f, "NegX(-1,0,0)"),
+            AxisDirection::PosX => write!(f, "PosX(+1,0,0)"),
+            AxisDirection::NegY => write!(f, "NegY(0,-1,0)"),
+            AxisDirection::PosY => write!(f, "PosY(0,+1,0)"),
+            AxisDirection::NegZ => write!(f, "NegZ(0,0,-1)"),
+            AxisDirection::PosZ => write!(f, "PosZ(0,0,+1)"),
+        }
+    }
 }
 
 impl AxisDirection {
@@ -43,6 +142,43 @@ impl AxisDirection {
             _ => None
         }
     }
+
+    pub fn from_axis(axis: Axis, sign: i32) -> Option<AxisDirection> {
+        match axis {
+            Axis::X if sign < 0 => Some(AxisDirection::NegX),
+            Axis::X if sign > 0 => Some(AxisDirection::PosX),
+            Axis::Y if sign < 0 => Some(AxisDirection::NegY),
+            Axis::Y if sign > 0 => Some(AxisDirection::PosY),
+            Axis::Z if sign < 0 => Some(AxisDirection::NegZ),
+            Axis::Z if sign > 0 => Some(AxisDirection::PosZ),
+            _ => None
+        }
+    }
+
+    pub fn from_vec(vec: Vec3) -> Option<AxisDirection> {
+        let (axis, sign) = Axis::axis_sign_vec(vec);
+        if sign != 0 {
+            return Self::from_axis(axis, sign)
+        }
+        None
+    }
+
+    pub fn from_dvec(vec: DVec3) -> Option<AxisDirection> {
+        let (axis, sign) = Axis::axis_sign_dvec(vec);
+        if sign != 0 {
+            return Self::from_axis(axis, sign);
+        }
+        None
+    }
+
+    pub fn from_ivec(vec: IVec3) -> Option<AxisDirection> {
+        let (axis, sign) = Axis::axis_sign_ivec(vec);
+        if sign != 0 {
+            return Self::from_axis(axis, sign);
+        }
+        None
+    }
+
     pub fn index(&self) -> u32 {
         match *self {
             AxisDirection::NegX => 0,
@@ -51,6 +187,17 @@ impl AxisDirection {
             AxisDirection::PosY => 3,
             AxisDirection::NegZ => 4,
             AxisDirection::PosZ => 5,
+        }
+    }
+
+    pub fn axis(&self) -> Axis {
+        match *self {
+            AxisDirection::NegX => Axis::X,
+            AxisDirection::PosX => Axis::X,
+            AxisDirection::NegY => Axis::Y,
+            AxisDirection::PosY => Axis::Y,
+            AxisDirection::NegZ => Axis::Z,
+            AxisDirection::PosZ => Axis::Z,
         }
     }
 
@@ -96,7 +243,6 @@ impl AxisDirection {
             AxisDirection::NegZ => AxisDirection::PosZ,
             AxisDirection::PosZ => AxisDirection::NegZ,
         }
-
     }
 
     pub fn name(&self) -> &str {

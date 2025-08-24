@@ -45,6 +45,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::{array, mem};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::ops::Index;
 use egui::{Context};
 use rayon::slice::ParallelSliceMut;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexType, Subbuffer};
@@ -230,6 +231,7 @@ pub struct VoxelRenderer {
     textures_changed: bool,
     materials_changed: bool,
 
+    free_indices: Vec<u32>,
     render_info: Vec<RenderInfo>,
     object_data: Vec<ObjectDataUBO>,
     object_indices: Vec<ObjectIndexUBO>,
@@ -1150,6 +1152,7 @@ impl VoxelRenderer {
             textures_changed: false,
             materials_changed: false,
             // indirect_draw_commands: vec![],
+            free_indices: vec![],
             render_info: vec![],
             object_data: vec![],
             object_indices: vec![],
@@ -1225,7 +1228,7 @@ impl VoxelRenderer {
         if ticker.time_since_last_dbg() >= ticker.debug_interval() {
 
             let len = engine.scene.world.loaded_chunks_count();
-            debug!("{len} chunks to render");
+            info!("{len} chunks to render");
         }
 
         self.scene_changed = false;
@@ -1245,9 +1248,6 @@ impl VoxelRenderer {
 
             Self::create_main_descriptor_sets(resource, self.solid_graphics_pipeline.as_ref().unwrap(), &engine.graphics)?;
         }
-
-
-        self.chunk_buffer_handler.free_batch();
 
         self.allocate_chunk_buffer_regions(&mut engine.scene)?;
 
@@ -1331,39 +1331,38 @@ impl VoxelRenderer {
 
         let mut scene_changed = false;
 
+        let mut update_mesh_count = 0;
         let mut vertex_buffer_alloc_count = 0;
         let mut index_buffer_alloc_count = 0;
-        let mut required_vertex_buffer_size: DeviceSize = 0;
-        let mut required_index_buffer_size: DeviceSize = 0;
+        let mut max_required_vertex_buffer_size: DeviceSize = 0;
+        let mut max_required_index_buffer_size: DeviceSize = 0;
 
         // Loop over updated chunks, figure out how much space needs to be allocated in the mesh buffer, and free necessary meshes.
-        for (_chunk_pos, chunk) in scene.world.loaded_chunks_mut() {
-            let chunk_data = chunk.chunk_data_mut();
-
+        scene.world.for_each_changed_chunks_mut(|chunk_data| {
             for i in 0..6 {
-                if !chunk_data.update_mesh(i) {
+                if !chunk_data.updated_mesh(i) {
                     continue;
                 }
 
                 if let Some(mesh_data) = chunk_data.updated_mesh_data(i) {
-
                     scene_changed = true;
+                    update_mesh_count += 1;
 
                     let vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
                     let index_buffer_size = mesh_data.get_required_index_buffer_size();
 
-                    required_vertex_buffer_size = DeviceSize::max(required_vertex_buffer_size, vertex_buffer_size);
-                    required_index_buffer_size = DeviceSize::max(required_index_buffer_size, index_buffer_size);
+                    max_required_vertex_buffer_size = DeviceSize::max(max_required_vertex_buffer_size, vertex_buffer_size);
+                    max_required_index_buffer_size = DeviceSize::max(max_required_index_buffer_size, index_buffer_size);
 
                     if let Some(chunk_mesh) = chunk_data.chunk_mesh_mut(i) {
-                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < vertex_buffer_size {
+                        if chunk_mesh.vertex_buffer_alloc.buffer_region.buffer_size < vertex_buffer_size {
                             // The existing allocated buffer region is too small. A new one will be allocated
                             self.chunk_buffer_handler.batch_free(chunk_mesh.vertex_buffer_alloc);
                             chunk_mesh.vertex_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
                             vertex_buffer_alloc_count += 1;
                         }
 
-                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size >= index_buffer_size {
+                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < index_buffer_size {
                             // The existing allocated buffer region is too small. A new one will be allocated
                             self.chunk_buffer_handler.batch_free(chunk_mesh.index_buffer_alloc);
                             chunk_mesh.index_buffer_alloc = NULL_CHUNK_BUFFER_ALLOC;
@@ -1376,10 +1375,10 @@ impl VoxelRenderer {
                     }
                 }
             }
-        }
+        });
 
-        required_vertex_buffer_size += required_vertex_buffer_size / 8; // +12.5% extra space
-        required_index_buffer_size += required_index_buffer_size / 8; // +12.5% extra space
+        max_required_vertex_buffer_size += max_required_vertex_buffer_size / 8; // +12.5% extra space
+        max_required_index_buffer_size += max_required_index_buffer_size / 8; // +12.5% extra space
 
         // let required_size = 262144;
 
@@ -1391,22 +1390,28 @@ impl VoxelRenderer {
         let mut chunk_vertex_buffers = Vec::with_capacity(vertex_buffer_alloc_count as usize);
         let mut chunk_index_buffers = Vec::with_capacity(index_buffer_alloc_count as usize);
         if vertex_buffer_alloc_count > 0 {
-            self.chunk_buffer_handler.allocate_multi_chunk_mesh(ChunkMeshBufferType::VertexBuffer, required_vertex_buffer_size, alignment, vertex_buffer_alloc_count, &mut chunk_vertex_buffers)?;
+            let success = self.chunk_buffer_handler.allocate_multi_chunk_mesh(ChunkMeshBufferType::VertexBuffer, max_required_vertex_buffer_size, alignment, vertex_buffer_alloc_count, &mut chunk_vertex_buffers)?;
+            assert_eq!(success, vertex_buffer_alloc_count);
         }
         if index_buffer_alloc_count > 0 {
-            self.chunk_buffer_handler.allocate_multi_chunk_mesh(ChunkMeshBufferType::IndexBuffer, required_index_buffer_size, alignment, index_buffer_alloc_count, &mut chunk_index_buffers)?;
+            let success = self.chunk_buffer_handler.allocate_multi_chunk_mesh(ChunkMeshBufferType::IndexBuffer, max_required_index_buffer_size, alignment, index_buffer_alloc_count, &mut chunk_index_buffers)?;
+            assert_eq!(success, index_buffer_alloc_count);
         }
 
         // Assign the allocated buffer regions to the chunk render components
 
-        for (_chunk_pos, chunk) in scene.world.loaded_chunks_mut() {
-            let chunk_data = chunk.chunk_data_mut();
+        let mut t = 0;
 
-            for i in 0..6 {
-                if chunk_data.update_mesh(i) {
+        if vertex_buffer_alloc_count > 0 || index_buffer_alloc_count > 0 {
+            scene.world.for_each_changed_chunks_mut(|chunk_data| {
+                for i in 0..6 {
+                    if !chunk_data.updated_mesh(i) {
+                        continue;
+                    }
+                    t += 1;
                     if let Some(mesh_data) = chunk_data.updated_mesh_data(i) {
-                        let required_vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
-                        let required_index_buffer_size = mesh_data.get_required_index_buffer_size();
+                        let vertex_buffer_size = mesh_data.get_required_vertex_buffer_size();
+                        let index_buffer_size = mesh_data.get_required_index_buffer_size();
 
                         let chunk_mesh = chunk_data.chunk_mesh_mut(i);
                         if chunk_mesh.is_none() {
@@ -1416,20 +1421,24 @@ impl VoxelRenderer {
                         let chunk_mesh = chunk_data.chunk_mesh_mut(i).unwrap();
                         chunk_mesh.index_count = 0;
 
-                        if chunk_mesh.vertex_buffer_alloc.buffer_region.buffer_size < required_vertex_buffer_size {
+                        if chunk_mesh.vertex_buffer_alloc.buffer_region.buffer_size < vertex_buffer_size {
                             chunk_mesh.vertex_buffer_alloc = chunk_vertex_buffers.pop().unwrap();
                         }
 
-                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < required_index_buffer_size {
+                        if chunk_mesh.index_buffer_alloc.buffer_region.buffer_size < index_buffer_size {
                             chunk_mesh.index_buffer_alloc = chunk_index_buffers.pop().unwrap();
                         }
                     }
                 }
-            }
-        };
+            });
+        }
+
+        // info!("TEST {t}");
+
+        // scene_changed = scene.world.changed_chunks_count() != 0 || scene.world.unloaded_chunks_count() != 0;
 
         if !scene_changed {
-            scene_changed = scene.world.has_chunks_unloaded();
+            scene_changed = scene.world.unloaded_chunks_count() > 0;
         }
 
         if scene_changed {
@@ -1464,24 +1473,202 @@ impl VoxelRenderer {
             return Ok(()); // Do nothing.
         }
 
-        self.render_info.clear();
-        self.object_data.clear();
-        self.object_indices.clear();
+        let mut updated_chunk_positions = vec![];
 
-        let mut index: u32 = 0;
+        let mut num_unloaded = 0;
+        let mut num_loaded = 0;
+        let mut num_reused = 0;
+        let mut num_updated = 0;
+        let mut num_meshes = 0;
 
-        // TODO: par_iter
-        scene.world.loaded_chunks_mut().for_each(|(chunk_pos, chunk)| {
-            let chunk_data = chunk.chunk_data_mut();
+        // Loop over all removed chunks, mark the corresponding render info as unused, and record a free index.
+        scene.world.unloaded_chunks_mut().for_each(|chunk_data| {
+            if chunk_data.render_index != u32::MAX {
+                let index = chunk_data.render_index;
+                self.free_indices.push(index);
 
+                let render_info = &mut self.render_info[index as usize];
+
+                // // clear out the existing chunk mesh (free & replace with None)
+                // for i in 0..6 {
+                //     if let Some(chunk_mesh) = render_info.chunk_mesh[i].take() {
+                //         self.chunk_buffer_handler.batch_free(chunk_mesh.vertex_buffer_alloc);
+                //         self.chunk_buffer_handler.batch_free(chunk_mesh.index_buffer_alloc);
+                //     }
+                // }
+
+                self.render_info[index as usize].index = u32::MAX; // Mark as unused
+                chunk_data.render_index = u32::MAX;
+                num_unloaded += 1;
+            }
+        });
+
+        // Loop over all updated chunks and update render info.
+        scene.world.for_each_changed_chunks_mut(|chunk_data| {
             if !chunk_data.has_mesh() {
                 return; // continue
             }
 
-            let transform = chunk.world_transform();
-            _ = self.prepare_scene_object(index, cmd_buf, chunk.chunk_data_mut(), transform);
-            index += 1;
+            if let Some(material) = &chunk_data.material {
+                self.register_material(material);
+            }
+
+            // This chunk has no assigned index in the render arrays...
+            if chunk_data.render_index == u32::MAX {
+                if self.free_indices.is_empty() {
+                    // No unused index, allocate a new slot
+                    chunk_data.render_index = self.render_info.len() as u32;
+
+                    self.render_info.push(RenderInfo{
+                        chunk_mesh: Default::default(),
+                        chunk_pos: *chunk_data.chunk_pos(),
+                        index: chunk_data.render_index,
+                    });
+                    self.object_data.push(ObjectDataUBO::default());
+                    self.object_indices.push(ObjectIndexUBO{ index: chunk_data.render_index });
+                    num_loaded += 1;
+                } else {
+                    // Simply reuse the existing allocated slot.
+                    chunk_data.render_index = self.free_indices.pop().unwrap();
+
+                    let render_info = &mut self.render_info[chunk_data.render_index as usize];
+
+                    render_info.chunk_mesh = Default::default();
+                    render_info.chunk_pos = *chunk_data.chunk_pos();
+                    render_info.index = chunk_data.render_index;
+                    self.object_indices[chunk_data.render_index as usize].index = chunk_data.render_index;
+                    num_reused += 1;
+                };
+            }
+
+            // self.chunk_buffer_handler.free_batch();
+
+            num_updated += 1;
+
+            let index = chunk_data.render_index as usize;
+
+            let transform = chunk_data.world_transform();
+
+            let mut object_data = &mut self.object_data[index];
+            Self::update_object_date_transform(&transform, &mut object_data);
+
+            if let Some(material) = &chunk_data.material {
+                self.register_material(material);
+            }
+
+            // let render_info = &mut self.render_info[index];
+            // render_info.chunk_mesh = Default::default();
+
+            let mut chunk_updated = false;
+
+            for i in 0..6 {
+
+                if chunk_data.updated_mesh(i as u32) {
+                    if let Some(mesh_data) = &mut chunk_data.updated_mesh_data[i] {
+                        if let Some(chunk_mesh) = &mut chunk_data.chunk_mesh[i] {
+                            self.upload_chunk_mesh_data(mesh_data, chunk_mesh).expect("Failed to upload chunk mesh data");
+                            // render_component.updated_mesh_data[i] = None;
+                            chunk_data.notify_mesh_upload_complete(i as u32);
+                            chunk_updated = true;
+                            num_meshes += 1;
+                        }
+                    }
+
+                    let render_info = &mut self.render_info[index];
+                    render_info.chunk_mesh[i] = chunk_data.chunk_mesh(i as u32).cloned();
+                }
+            }
+
+            if chunk_updated {
+                updated_chunk_positions.push(*chunk_data.chunk_pos());
+                // chunk_data.notify_mesh_changed();
+            }
         });
+
+        scene.world.for_each_loaded_chunks_mut(|chunk_data| {
+            if chunk_data.has_mesh() {
+                debug_assert!(chunk_data.render_index != u32::MAX);
+                let index = chunk_data.render_index as usize;
+                let render_info = &self.render_info[index];
+
+                debug_assert_eq!(render_info.index, chunk_data.render_index);
+
+                debug_assert_eq!(render_info.chunk_pos, *chunk_data.chunk_pos());
+
+                debug_assert_eq!(self.object_indices[index].index, chunk_data.render_index);
+            }
+        });
+
+
+        // info!("Unloaded {num_unloaded} chunks, loaded {num_loaded} chunks, reused {num_reused} chunks, updated {num_updated} chunks ({num_meshes} updated meshes) // {} free indices, {} render objects", self.free_indices.len(), self.render_info.len());
+
+
+
+
+
+        // self.render_info.clear();
+        // self.object_data.clear();
+        // self.object_indices.clear();
+        //
+        // let mut index: u32 = 0;
+        //
+        // scene.world.for_each_loaded_chunks_mut(|chunk_data| {
+        //     if !chunk_data.has_mesh() {
+        //         return; // continue
+        //     }
+        //
+        //     let transform = chunk_data.world_transform();
+        //
+        //     let mut object_data = ObjectDataUBO::default();
+        //     Self::update_object_date_transform(&transform, &mut object_data);
+        //
+        //     if let Some(material) = &chunk_data.material {
+        //         self.register_material(material);
+        //     }
+        //
+        //     let mut render_info = RenderInfo{
+        //         chunk_mesh: Default::default(),
+        //         chunk_pos: *chunk_data.chunk_pos(),
+        //         index
+        //     };
+        //
+        //     chunk_data.render_index = index;
+        //
+        //     let mut chunk_updated = false;
+        //
+        //     for i in 0..6 {
+        //         render_info.chunk_mesh[i] = chunk_data.chunk_mesh(i as u32).cloned();
+        //
+        //         if chunk_data.updated_mesh(i as u32) {
+        //             if let Some(mesh_data) = &mut chunk_data.updated_mesh_data[i] {
+        //                 if let Some(chunk_mesh) = &mut chunk_data.chunk_mesh[i] {
+        //                     self.upload_chunk_mesh_data(mesh_data, chunk_mesh).expect("Failed to upload chunk mesh data");
+        //                     // render_component.updated_mesh_data[i] = None;
+        //                     chunk_data.notify_mesh_upload_complete(i as u32);
+        //                     chunk_updated = true;
+        //                 }
+        //             }
+        //         }
+        //     }
+        //
+        //     if chunk_updated {
+        //         updated_chunk_positions.push(*chunk_data.chunk_pos());
+        //         // chunk_data.notify_mesh_changed();
+        //     }
+        //
+        //     self.render_info.push(render_info);
+        //
+        //     self.object_data.push(object_data);
+        //     self.object_indices.push(ObjectIndexUBO{ index });
+        //
+        //     index += 1;
+        // });
+
+
+
+        for chunk_pos in updated_chunk_positions {
+            scene.world.notify_chunk_mesh_changed(&chunk_pos);
+        }
 
         // self.object_indices[start_index..].par_sort_unstable_by(|lhs_idx, rhs_idx| {
         //     let lhs = &self.render_info[lhs_idx.index as usize];
@@ -1490,7 +1677,8 @@ impl VoxelRenderer {
         //     lhs.mesh.cmp(&rhs.mesh)
         // });
 
-        self.object_count = index;
+        self.object_count = self.object_indices.len() as u32;
+        // self.object_count = index;
 
         Ok(())
     }
@@ -1509,38 +1697,6 @@ impl VoxelRenderer {
     }
 
     fn prepare_scene_object(&mut self, index: u32, cmd_buf: &mut CommandBuffer, chunk_data: &mut VoxelChunkData, transform: Transform) -> Result<()> {
-        let mut object_data = ObjectDataUBO::default();
-        Self::update_object_date_transform(&transform, &mut object_data);
-
-        if let Some(material) = &chunk_data.material {
-            self.register_material(material);
-        }
-
-        let mut render_info = RenderInfo{
-            chunk_mesh: Default::default(),
-            chunk_pos: *chunk_data.chunk_pos(),
-            index
-        };
-
-        for i in 0..6 {
-            render_info.chunk_mesh[i] = chunk_data.chunk_mesh(i as u32).cloned();
-
-            if chunk_data.update_mesh(i as u32) {
-                if let Some(mesh_data) = &mut chunk_data.updated_mesh_data[i] {
-                    if let Some(chunk_mesh) = &mut chunk_data.chunk_mesh[i] {
-                        self.upload_chunk_mesh_data(mesh_data, chunk_mesh)?;
-                        // render_component.updated_mesh_data[i] = None;
-                        chunk_data.notify_mesh_updated(i as u32);
-                    }
-                }
-            }
-        }
-
-        self.render_info.push(render_info);
-
-        self.object_data.push(object_data);
-        self.object_indices.push(ObjectIndexUBO{ index });
-
         Ok(())
     }
 
@@ -1582,6 +1738,10 @@ impl VoxelRenderer {
         let index_size = size_of::<u32>() as DeviceSize;
 
         for render_info in self.render_info.iter() {
+
+            if render_info.index == u32::MAX {
+                continue;
+            }
 
             for i in 0..6 {
                 if let Some(chunk_mesh) = render_info.chunk_mesh[i].as_ref() {

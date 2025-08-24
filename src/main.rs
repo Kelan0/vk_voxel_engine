@@ -5,13 +5,13 @@ use std::any::type_name;
 use crate::application::ticker::TickProfileStatistics;
 use crate::application::window::WindowResizedEvent;
 use crate::application::Key;
-use crate::core::{set_default_env_var, util, AxisDirection, BaseVertex, CommandBuffer, Material, Mesh, MeshConfiguration, MeshData, MeshDataConfig, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
+use crate::core::{debug_mesh, set_default_env_var, util, AxisDirection, BaseVertex, CommandBuffer, DebugRenderContext, Material, Mesh, MeshConfiguration, MeshData, MeshDataConfig, MeshPrimitiveType, RecreateSwapchainEvent, RenderComponent, RenderType, Scene, StandardMemoryAllocator, TextureAtlas, Transform, UpdateComponent, WireframeMode};
 use anyhow::Result;
 use application::ticker::Ticker;
 use application::App;
 use bevy_ecs::entity::Entity;
 use core::Engine;
-use glam::{DVec3, IVec3, Vec3};
+use glam::{DVec3, IVec3, U16Vec2, U8Vec4, Vec3};
 use log::{debug, error, info};
 use sdl3::mouse::MouseButton;
 use shrev::ReaderId;
@@ -28,6 +28,7 @@ use simdeez::sse41::Sse41;
 use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 use wide::f32x8;
+use crate::application::input_handler::MouseBtn;
 use crate::core::MeshBufferOption::AllocateNew;
 
 struct TestGame {
@@ -40,6 +41,10 @@ struct TestGame {
 
     test_mesh: Option<Arc<Mesh<BaseVertex>>>,
     debug_time_blocked: f64,
+
+    test: Vec<(IVec3, AxisDirection, f64)>,
+    ray_origin: DVec3,
+    ray_dir: DVec3,
 }
 
 impl TestGame {
@@ -53,6 +58,10 @@ impl TestGame {
             debug_stats: vec![],
             test_mesh: None,
             debug_time_blocked: 0.0,
+
+            test: vec![],
+            ray_origin: DVec3::ZERO,
+            ray_dir: DVec3::ZERO,
         }
     }
 
@@ -170,7 +179,7 @@ impl App for TestGame {
         // engine.scene_renderer.add_mesh(mesh);
 
         let camera = &mut engine.render_camera_mut().camera;
-        camera.set_perspective(70.0, 4.0 / 3.0, 0.3 * Transform::WORLD_SCALE as f32, 1024.0 * Transform::WORLD_SCALE as f32);
+        camera.set_perspective(70.0, 4.0 / 3.0, 0.3 * Transform::WORLD_SCALE as f32, 10000.0 * Transform::WORLD_SCALE as f32);
         camera.set_position(DVec3::new(1.0, 0.0, -3.0));
 
         let num_x = 10;
@@ -328,9 +337,9 @@ impl App for TestGame {
 
             let camera = &mut engine.render_camera.camera;
 
-            if engine.window.input().mouse_pressed(MouseButton::Left) {
-                self.add_test_entity(&mut engine.scene, (camera.position() + camera.z_axis() * 2.0).as_vec3());
-            }
+            // if engine.window.input().mouse_pressed(MouseButton::Left) {
+            //     self.add_test_entity(&mut engine.scene, (camera.position() + camera.z_axis() * 2.0).as_vec3());
+            // }
 
             let up_axis = DVec3::Y;
             let right_axis = camera.x_axis();
@@ -362,6 +371,92 @@ impl App for TestGame {
                 let move_speed = self.move_speed * ticker.delta_time();
                 move_dir = DVec3::normalize(move_dir) * move_speed;
                 camera.move_position(move_dir);
+            }
+        }
+
+        let camera = &engine.render_camera.camera;
+
+        // const BLOCK_MESH_OFFSET: Vec3 = Vec3::new(0.5, 0.5, 0.5);
+        const BLOCK_MESH_OFFSET: Vec3 = Vec3::new(0.0, 0.0, 0.0);
+
+        fn draw_highlight_block(ctx: &mut DebugRenderContext, block_pos: IVec3, offset: Vec3, color: U8Vec4) {
+            ctx.add_mesh(debug_mesh::mesh_box_lines(),
+                         *Transform::new()
+                             .translate(block_pos.as_vec3() + BLOCK_MESH_OFFSET + offset)
+                             .scale(Vec3::new(1.0, 1.0, 1.0)), color);
+        }
+
+        let show_ray = engine.window.input().key_down(Key::F);
+
+        if !show_ray {
+            self.test.clear();
+            self.ray_origin = camera.position();
+            self.ray_dir = camera.z_axis();
+        }
+
+        let mut pick: Option<(IVec3, AxisDirection)> = None;
+
+        let mut max_dist = 0.0;
+
+        engine.scene.world.ray_cast_block(self.ray_origin, self.ray_dir, |block_pos, block_face, distance| {
+            max_dist = f64::max(max_dist, distance);
+
+            if distance > 8.0 {
+                return true;
+            }
+
+            if !show_ray {
+                self.test.push((block_pos, block_face, distance));
+            }
+
+            if let Some(block) = engine.scene.world.get_block(block_pos) && block != 0 {
+
+                let z_offset: Vec3 = (camera.z_axis() * -0.01).as_vec3();
+                draw_highlight_block(engine.scene_renderer.debug_render_context(), block_pos, z_offset, U8Vec4::new(0, 0, 0, 255));
+
+                info!("Picked block: {block} face: {block_face} at {block_pos}");
+                pick = Some((block_pos, block_face));
+                return true;
+            }
+            false
+        }, 2048);
+
+        if show_ray {
+            let ctx = engine.scene_renderer.debug_render_context();
+
+            let mesh = ctx.begin(MeshPrimitiveType::LineList);
+            let i0 = mesh.add_vertex(BaseVertex::new(self.ray_origin.as_vec3(), Vec3::ZERO, U8Vec4::new(255, 0, 0, 255), U16Vec2::ZERO));
+            let i1 = mesh.add_vertex(BaseVertex::new((self.ray_origin + self.ray_dir * max_dist).as_vec3(), Vec3::ZERO, U8Vec4::new(255, 0, 0, 255), U16Vec2::ZERO));
+            mesh.add_line(i0, i1);
+            ctx.end();
+
+            for (block_pos, block_face, dist) in self.test.iter() {
+                draw_highlight_block(ctx, *block_pos, Vec3::ZERO, U8Vec4::new(0, 0, 200, 255));
+
+                    let p0 = self.ray_origin + self.ray_dir * dist;
+
+                let sz = 1.0 / 16.0;
+                ctx.add_mesh(debug_mesh::mesh_box_lines(),
+                             *Transform::new()
+                                 .translate(p0.as_vec3())
+                                 .scale(Vec3::new(sz, sz, sz)), U8Vec4::new(60, 190, 60, 255));
+
+                // let face_mesh = ctx.begin(MeshPrimitiveType::LineList);
+                // let v0 = face_mesh.vertex().pos([])
+                // ctx.end();
+            }
+        }
+
+
+        if let Some((block_pos, block_face)) = pick {
+            if engine.window.input().mouse_pressed(MouseBtn::Left) {
+                // break block
+                engine.scene.world.set_block(block_pos, 0);
+
+            } else if engine.window.input().mouse_pressed(MouseBtn::Right) {
+                // place block on face
+                let block_pos = block_pos + block_face.ivec();
+                engine.scene.world.set_block(block_pos, 1);
             }
         }
 

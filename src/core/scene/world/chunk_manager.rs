@@ -9,12 +9,14 @@ use anyhow::Result;
 use foldhash::{HashMap, HashMapExt};
 use glam::{DVec3, IVec3};
 use log::{debug, info};
+use rayon::slice::ParallelSliceMut;
 use crate::core::scene::world::{distance_sq_between_chunks, VoxelChunkData};
 use crate::core::{AxisDirection, Engine, WorldGenerator};
+use crate::core::world::ChunkStage;
 
 type ThreadHandle = JoinHandle<()>;
 
-pub struct ChunkLoader {
+pub struct ChunkManager {
     threads: Vec<ChunkLoaderThreadWrapper>,
     shared_ctx: Arc<Mutex<ChunkLoaderSharedContext>>,
     world_generator: Arc<WorldGenerator>,
@@ -24,10 +26,11 @@ pub struct ChunkLoader {
 }
 
 struct ChunkLoaderSharedContext {
-    chunk_generate_queue: VecDeque<ChunkLoadTask>,
-    chunk_mesh_queue: VecDeque<ChunkLoadTask>,
-    chunk_complete_queue: Vec<VoxelChunkData>,
-    generated_chunk_neighbours: HashMap<IVec3, [Option<VoxelChunkData>; 6]>,
+    chunk_tasks: HashMap<IVec3, ChunkLoadTask>,
+    chunk_generate_queue: VecDeque<IVec3>,
+    chunk_mesh_queue: VecDeque<IVec3>,
+    chunk_complete_queue: Vec<ChunkTaskResult>,
+    // generated_chunk_neighbours: HashMap<IVec3, [Option<NeighbourChunkData>; 6]>,
     chunk_canceled_queue: Vec<ChunkLoadTask>,
     new_completed_chunks: bool,
     new_canceled_chunks: bool,
@@ -35,6 +38,11 @@ struct ChunkLoaderSharedContext {
     chunk_load_radius: f64,
     // engine: Arc<Engine>,
     queues_ready: bool,
+}
+
+enum NeighbourChunkData {
+    NotEmpty(VoxelChunkData),
+    Empty
 }
 
 struct ChunkLoaderThreadContext {
@@ -62,7 +70,17 @@ pub enum ChunkLoadTask {
     },
     GenerateMesh{
         chunk_data: VoxelChunkData,
+        neighbours: [Option<VoxelChunkData>; 6],
     },
+}
+
+pub enum ChunkTaskResult {
+    GenerateVoxels {
+        chunk_data: VoxelChunkData,
+    },
+    GenerateMesh {
+        chunk_data: VoxelChunkData,
+    }
 }
 
 impl ChunkLoadTask {
@@ -74,27 +92,37 @@ impl ChunkLoadTask {
     }
 }
 
+impl ChunkTaskResult {
+    pub fn chunk_pos(&self) -> &IVec3 {
+        match self {
+            ChunkTaskResult::GenerateVoxels { chunk_data } => chunk_data.chunk_pos(),
+            ChunkTaskResult::GenerateMesh { chunk_data } => chunk_data.chunk_pos()
+        }
+    }
+}
+
 // unsafe impl Send for ChunkLoaderThreadWrapper {}
 // unsafe impl Sync for ChunkLoaderThreadWrapper {}
 // unsafe impl Send for ChunkLoaderThreadContext {}
 // unsafe impl Sync for ChunkLoaderThreadContext {}
 
-impl ChunkLoader {
+impl ChunkManager {
     pub fn new(world_generator: Arc<WorldGenerator>) -> Self {
         let shared_ctx = ChunkLoaderSharedContext {
+            chunk_tasks: HashMap::new(),
             chunk_generate_queue: VecDeque::new(),
             chunk_mesh_queue: VecDeque::new(),
             chunk_complete_queue: vec![],
             chunk_canceled_queue: vec![],
             new_completed_chunks: false,
             new_canceled_chunks: false,
-            generated_chunk_neighbours: HashMap::new(),
+            // generated_chunk_neighbours: HashMap::new(),
             center_chunk_pos: IVec3::ZERO,
             chunk_load_radius: 0.0,
             queues_ready: false,
         };
 
-        ChunkLoader{
+        ChunkManager {
             threads: vec![],
             shared_ctx: Arc::new(Mutex::new(shared_ctx)),
             world_generator,
@@ -136,10 +164,10 @@ impl ChunkLoader {
     }
 
     pub fn request_generate_chunk(&mut self, chunk_pos: IVec3) -> Result<()> {
-        self.request_generate_chunks(vec![chunk_pos])
+        self.request_generate_chunks(slice::from_ref(&chunk_pos))
     }
 
-    pub fn request_generate_chunks(&mut self, chunk_positions: Vec<IVec3>) -> Result<()> {
+    pub fn request_generate_chunks(&mut self, chunk_positions: &[IVec3]) -> Result<()> {
         if chunk_positions.is_empty() {
             return Ok(())
         }
@@ -147,15 +175,48 @@ impl ChunkLoader {
         let mut ctx = self.shared_ctx.lock()
             .map_err(|e| anyhow!("ChunkLoader - Error requesting chunk load: could not lock mutex: {e}"))?;
 
-        for chunk_pos in chunk_positions {
-            ctx.chunk_generate_queue.push_back(ChunkLoadTask::GenerateVoxels {
+        for &chunk_pos in chunk_positions {
+            ctx.chunk_tasks.insert(chunk_pos, ChunkLoadTask::GenerateVoxels {
                 chunk_pos
             });
+            ctx.chunk_generate_queue.push_back(chunk_pos);
         }
 
         self.chunk_generate_request_count = ctx.chunk_generate_queue.len();
         self.chunk_mesh_request_count = ctx.chunk_mesh_queue.len();
         self.canceled_chunks_count = ctx.chunk_canceled_queue.len();
+        Ok(())
+    }
+
+    pub fn request_mesh_chunk(&mut self, chunk: VoxelChunkData, neighbours: [Option<&VoxelChunkData>; 6]) -> Result<()> {
+        self.request_mesh_chunks(slice::from_ref(&(chunk, neighbours)))
+    }
+
+    pub fn request_mesh_chunks(&mut self, chunks: &[(VoxelChunkData, [Option<&VoxelChunkData>; 6])]) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(())
+        }
+
+        let mut ctx = self.shared_ctx.lock()
+            .map_err(|e| anyhow!("ChunkLoader - Error requesting chunk load: could not lock mutex: {e}"))?;
+
+        for (chunk_data, neighbours) in chunks.iter() {
+            let mut temp_neighbours: [Option<VoxelChunkData>; 6] = Default::default();
+            for i in 0..6 {
+                temp_neighbours[i] = neighbours[i].cloned();
+            }
+            let chunk_pos = *chunk_data.chunk_pos();
+            ctx.chunk_tasks.insert(chunk_pos, ChunkLoadTask::GenerateMesh {
+                chunk_data: chunk_data.clone(),
+                neighbours: temp_neighbours,
+            });
+            ctx.chunk_mesh_queue.push_back(chunk_pos);
+        }
+
+        self.chunk_generate_request_count = ctx.chunk_generate_queue.len();
+        self.chunk_mesh_request_count = ctx.chunk_mesh_queue.len();
+        self.canceled_chunks_count = ctx.chunk_canceled_queue.len();
+
         Ok(())
     }
 
@@ -167,7 +228,7 @@ impl ChunkLoader {
     }
 
     pub fn drain_completed_chunks<F>(&mut self, mut count: usize, mut callback_fn: F) -> Result<()>
-    where F: FnMut(VoxelChunkData) {
+    where F: FnMut(ChunkTaskResult) {
         if count == 0 {
             return Ok(());
         }
@@ -181,9 +242,9 @@ impl ChunkLoader {
             ctx.new_completed_chunks = false;
 
             // Sorted so that the closest chunks are at the end of the list (pop() first)
-            ctx.chunk_complete_queue.sort_unstable_by(|chunk1, chunk2| {
-                let dist1 = (center_pos - chunk1.chunk_pos()).as_i64vec3().length_squared();
-                let dist2 = (center_pos - chunk2.chunk_pos()).as_i64vec3().length_squared();
+            ctx.chunk_complete_queue.par_sort_unstable_by(|a, b| {
+                let dist1 = (center_pos - a.chunk_pos()).as_i64vec3().length_squared();
+                let dist2 = (center_pos - b.chunk_pos()).as_i64vec3().length_squared();
                 dist2.cmp(&dist1)
             });
         }
@@ -257,7 +318,7 @@ impl ChunkLoader {
                 ctx.new_canceled_chunks = false;
 
                 // Sorted so that the furthest positions are at the end of the list (pop() first)
-                ctx.chunk_canceled_queue.sort_unstable_by(|pos1, pos2| {
+                ctx.chunk_canceled_queue.par_sort_unstable_by(|pos1, pos2| {
                     let dist1 = (center_pos - pos1.chunk_pos()).as_i64vec3().length_squared();
                     let dist2 = (center_pos - pos2.chunk_pos()).as_i64vec3().length_squared();
                     dist1.cmp(&dist2)
@@ -433,7 +494,7 @@ impl ChunkLoader {
                     Self::build_chunk_mesh(&mut chunk, neighbours);
 
                     let mut ctx = shared_ctx.lock().expect("ChunkLoader - Failed to lock shared context");
-                    ctx.chunk_complete_queue.push(chunk);
+                    ctx.chunk_complete_queue.push(ChunkTaskResult::GenerateMesh { chunk_data: VoxelChunkData::new_stage(chunk, ChunkStage::Ready) });
                     ctx.new_completed_chunks = true;
                 }
 
@@ -455,16 +516,34 @@ impl ChunkLoader {
 
                     let mut ctx = shared_ctx.lock().expect("ChunkLoader - Failed to lock shared context");
 
-                    for i in 0..6 {
-                        let neighbour_dir = AxisDirection::from_index(i).unwrap(); // point to neighbour from this
-                        let this_dir = neighbour_dir.opposite(); // point to this from neighbour
-                        let neighbours = ctx.generated_chunk_neighbours.entry(chunk_pos + neighbour_dir.ivec()).or_default();
-                        neighbours[this_dir.index() as usize] = Some(chunk.clone())
-                    }
+                    // for i in 0..6 {
+                    //     let neighbour_dir = AxisDirection::from_index(i).unwrap(); // point to neighbour from this chunk
+                    //     let this_dir = neighbour_dir.opposite(); // point to this chunk from neighbour
+                    //     let neighbours = ctx.generated_chunk_neighbours.entry(chunk_pos + neighbour_dir.ivec()).or_default();
+                    //     neighbours[this_dir.index() as usize] = if chunk.block_count() != 0 {
+                    //         Some(NeighbourChunkData::NotEmpty(chunk.clone()))
+                    //     } else {
+                    //         Some(NeighbourChunkData::Empty)
+                    //     }
+                    // }
 
-                    ctx.chunk_mesh_queue.push_back(ChunkLoadTask::GenerateMesh {
-                        chunk_data: chunk
-                    });
+
+                    ctx.chunk_complete_queue.push(ChunkTaskResult::GenerateVoxels { chunk_data: VoxelChunkData::new_stage(chunk, ChunkStage::NotMeshed) });
+                    ctx.new_completed_chunks = true;
+
+
+                    // if chunk.block_count() == 0 {
+                    //     // This chunk has no blocks, no mesh needed, it is complete.
+                    //     ctx.chunk_complete_queue.push(ChunkTaskResult::GenerateVoxels { chunk_data: chunk });
+                    //     ctx.new_completed_chunks = true;
+                    //
+                    // } else {
+                    //     // Blocks were generated for this chunk, add it to the mesh queue
+                    //     ctx.chunk_tasks.insert(chunk_pos, ChunkLoadTask::GenerateMesh {
+                    //         chunk_data: chunk
+                    //     });
+                    //     ctx.chunk_mesh_queue.push_back(chunk_pos);
+                    // }
                 }
 
 
@@ -504,23 +583,24 @@ impl ChunkLoader {
 
         let mut count = 0;
 
-        while let Some(task) = ctx.chunk_generate_queue.pop_front() {
-            let chunk_pos = task.chunk_pos();
+        while let Some(chunk_pos) = ctx.chunk_generate_queue.pop_front() {
+            if let Some(task) = ctx.chunk_tasks.remove(&chunk_pos) {
 
-            if distance_sq_between_chunks(ctx.center_chunk_pos, *chunk_pos) < r2 {
-                // Return the first position within range
-                out_positions.push(*chunk_pos);
-                count += 1;
+                if distance_sq_between_chunks(ctx.center_chunk_pos, chunk_pos) < r2 {
+                    // Return the first position within range
+                    out_positions.push(chunk_pos);
+                    count += 1;
 
-                if count >= max_count {
-                    break;
+                    if count >= max_count {
+                        break;
+                    }
+
+                } else {
+                    // This position is out of range, so ensure a Canceled state is returned later.
+                    ctx.chunk_canceled_queue.push(task);
+                    ctx.new_canceled_chunks = true;
+                    skip_count += 1;
                 }
-
-            } else {
-                // This position is out of range, so ensure a Canceled state is returned later.
-                ctx.chunk_canceled_queue.push(task);
-                ctx.new_canceled_chunks = true;
-                skip_count += 1;
             }
         }
         if skip_count > 0 {
@@ -547,43 +627,49 @@ impl ChunkLoader {
 
         let mut count = 0;
 
-        while let Some(task) = ctx.chunk_mesh_queue.pop_front() {
-            if let ChunkLoadTask::GenerateMesh { chunk_data } = task {
+        while let Some(chunk_pos) = ctx.chunk_mesh_queue.pop_front() {
+            if let Some(task) = ctx.chunk_tasks.remove(&chunk_pos) {
 
-                let chunk_pos = *chunk_data.chunk_pos();
-                if distance_sq_between_chunks(ctx.center_chunk_pos, chunk_pos) < r2 {
+                if let ChunkLoadTask::GenerateMesh { chunk_data, neighbours } = task {
 
-                    if !Self::has_required_neighbours_for_chunk_pos(chunk_pos, &ctx) {
-                        // The position we popped did not have the required neighbours, push it back to the queue.
-                        // TODO: this is not a good solution... think harder
-                        ctx.chunk_mesh_queue.push_back(ChunkLoadTask::GenerateMesh {
-                            chunk_data
-                        });
-                    } else {
-                        // Return the first position within range that has the required neighbours
-                        let neighbours = if let Some(neighbours) =ctx.generated_chunk_neighbours.remove(&chunk_pos) {
-                            neighbours
-                        } else {
-                            Default::default()
-                        };
-                        
+                    if distance_sq_between_chunks(ctx.center_chunk_pos, chunk_pos) < r2 {
+
+                        // if !Self::has_required_neighbours_for_chunk_pos(chunk_pos, &ctx) {
+                        //     // The position we popped did not have the required neighbours, push it back to the queue.
+                        //     // TODO: this is not a good solution... think harder
+                        //     ctx.chunk_tasks.insert(chunk_pos, ChunkLoadTask::GenerateMesh {
+                        //         chunk_data,
+                        //     });
+                        //     ctx.chunk_mesh_queue.push_back(chunk_pos);
+                        // } else {
+                        //     // // Return the first position within range that has the required neighbours
+                        //     // let neighbours = if let Some(neighbours) =ctx.generated_chunk_neighbours.remove(&chunk_pos) {
+                        //     //     neighbours
+                        //     // } else {
+                        //     //     Default::default()
+                        //     // };
+                        //
+                        //     out_chunk_data.push((chunk_data, Default::default()));
+                        // }
+
                         out_chunk_data.push((chunk_data, neighbours));
+
+                        count += 1;
+
+                        if count >= max_count {
+                            break;
+                        }
+
+                    } else {
+                        // This position is out of range, so ensure a Canceled state is returned later.
+                        ctx.chunk_canceled_queue.push(ChunkLoadTask::GenerateMesh {
+                            chunk_data,
+                            neighbours: Default::default()
+                        });
+                        // ctx.generated_chunk_neighbours.remove(&chunk_pos);
+                        ctx.new_canceled_chunks = true;
+                        skip_count += 1;
                     }
-
-                    count += 1;
-
-                    if count >= max_count {
-                        break;
-                    }
-
-                } else {
-                    // This position is out of range, so ensure a Canceled state is returned later.
-                    ctx.chunk_canceled_queue.push(ChunkLoadTask::GenerateMesh {
-                        chunk_data
-                    });
-                    ctx.generated_chunk_neighbours.remove(&chunk_pos);
-                    ctx.new_canceled_chunks = true;
-                    skip_count += 1;
                 }
             }
         }
@@ -596,37 +682,37 @@ impl ChunkLoader {
     }
 
     fn has_required_neighbours_for_chunk_pos(chunk_pos: IVec3, shared_ctx: &MutexGuard<ChunkLoaderSharedContext>) -> bool {
-        let r2 = shared_ctx.chunk_load_radius * shared_ctx.chunk_load_radius;
-
-        let neighbours = shared_ctx.generated_chunk_neighbours.get(&chunk_pos);
-        if neighbours.is_none() {
-            return false;
-        }
-        let neighbours = neighbours.unwrap();
-
-        for i in 0..6 {
-            let dir = AxisDirection::from_index(i).unwrap();
-            let neighbour_pos = chunk_pos + dir.ivec();
-            if distance_sq_between_chunks(shared_ctx.center_chunk_pos, neighbour_pos) > r2 {
-                continue;
-            }
-
-            if neighbours[i as usize].is_none() {
-                return false;
-            }
-        }
+        // let r2 = shared_ctx.chunk_load_radius * shared_ctx.chunk_load_radius;
+        //
+        // let neighbours = shared_ctx.generated_chunk_neighbours.get(&chunk_pos);
+        // if neighbours.is_none() {
+        //     return false;
+        // }
+        // let neighbours = neighbours.unwrap();
+        //
+        // for i in 0..6 {
+        //     let dir = AxisDirection::from_index(i).unwrap();
+        //     let neighbour_pos = chunk_pos + dir.ivec();
+        //     if distance_sq_between_chunks(shared_ctx.center_chunk_pos, neighbour_pos) > r2 {
+        //         continue;
+        //     }
+        //
+        //     if neighbours[i as usize].is_none() {
+        //         return false;
+        //     }
+        // }
 
         true
     }
 
-    fn generate_chunk_data(chunk: &mut VoxelChunkData, thread_ctx: &Arc<ChunkLoaderThreadContext>) {
+    pub fn generate_chunk_data(chunk: &mut VoxelChunkData, thread_ctx: &Arc<ChunkLoaderThreadContext>) {
 
         let world_generator = &thread_ctx.world_generator;
 
         world_generator.load_chunk(chunk).expect("ChunkLoader - Failed to load chunk");
     }
 
-    fn build_chunk_mesh(chunk: &mut VoxelChunkData, neighbours: [Option<VoxelChunkData>; 6]) {
+    pub fn build_chunk_mesh(chunk: &mut VoxelChunkData, neighbours: [Option<VoxelChunkData>; 6]) {
         chunk.update_mesh_data(neighbours).expect("ChunkLoader - Failed to build chunk mesh");
     }
 
@@ -640,7 +726,7 @@ impl ChunkLoader {
         count
     }
 
-    fn chunk_load_sort_comparator(center_pos: IVec3, pos1: IVec3, pos2: IVec3) -> Ordering {
+    fn chunk_load_sort_comparator(center_pos: &IVec3, pos1: &IVec3, pos2: &IVec3) -> Ordering {
         let mut d1 = (center_pos - pos1).as_i64vec3();
         let mut d2 = (center_pos - pos2).as_i64vec3();
         d1.y *= 2; // Bias the loading order to prioritise horizontal distance, vertical difference is less important.
@@ -662,7 +748,7 @@ impl ChunkLoader {
         let mut shared_ctx = self.shared_ctx.lock()
             .map_err(|e| anyhow!("ChunkLoader - Unable to update chunk queue - failed to lock mutex for shared context: {e}"))?;
 
-        info!("Neighbour chunks stored: {}", shared_ctx.generated_chunk_neighbours.len());
+        // info!("Neighbour chunks stored: {}", shared_ctx.generated_chunk_neighbours.len());
         
         shared_ctx.chunk_load_radius = chunk_load_radius as f64;
 
@@ -670,22 +756,22 @@ impl ChunkLoader {
             shared_ctx.center_chunk_pos = center_chunk_pos;
 
             // Sorted so that the closest chunks are at the front of the queue (pop_front() first)
-            shared_ctx.chunk_generate_queue.make_contiguous().sort_unstable_by(|pos1, pos2| {
-                Self::chunk_load_sort_comparator(center_pos, *pos1.chunk_pos(), *pos2.chunk_pos())
+            shared_ctx.chunk_generate_queue.make_contiguous().par_sort_unstable_by(|pos1, pos2| {
+                Self::chunk_load_sort_comparator(&center_pos, pos1, pos2)
             });
-            shared_ctx.chunk_mesh_queue.make_contiguous().sort_unstable_by(|chunk1, chunk2| {
-                Self::chunk_load_sort_comparator(center_pos, *chunk1.chunk_pos(), *chunk2.chunk_pos())
+            shared_ctx.chunk_mesh_queue.make_contiguous().par_sort_unstable_by(|pos1, pos2| {
+                Self::chunk_load_sort_comparator(&center_pos, pos1, pos2)
             });
         }
 
-        let generate_queue_canceled_count = Self::cleanup_chunk_generate_queue(center_chunk_pos, shared_ctx.chunk_load_radius, &mut shared_ctx.chunk_generate_queue, |chunk_pos| {
+        let generate_queue_canceled_count = Self::cleanup_chunk_generate_queue(center_chunk_pos, &mut shared_ctx, |chunk_pos| {
             // shared_ctx.chunk_canceled_queue.push(chunk_pos);
             if let Some(callback) = &mut canceled_callback_fn {
                 callback(chunk_pos);
             }
         });
 
-        let mesh_queue_canceled_count = Self::cleanup_chunk_mesh_queue(center_chunk_pos, shared_ctx.chunk_load_radius, &mut shared_ctx.chunk_mesh_queue, |chunk_pos| {
+        let mesh_queue_canceled_count = Self::cleanup_chunk_mesh_queue(center_chunk_pos, &mut shared_ctx, |chunk_pos| {
             // shared_ctx.chunk_canceled_queue.push(chunk_pos);
             if let Some(callback) = &mut canceled_callback_fn {
                 callback(chunk_pos);
@@ -703,47 +789,71 @@ impl ChunkLoader {
         Ok(())
     }
 
-    fn cleanup_chunk_generate_queue<F>(center_chunk_pos: IVec3, chunk_load_radius: f64, chunk_generate_queue: &mut VecDeque<ChunkLoadTask>, mut canceled_callback_fn: F) -> usize
+    fn cleanup_chunk_generate_queue<F>(center_chunk_pos: IVec3, shared_ctx: &mut MutexGuard<ChunkLoaderSharedContext>, mut canceled_callback_fn: F) -> usize
     where F: FnMut(IVec3) {
-        let r2 = chunk_load_radius * chunk_load_radius;
+        let r2 = shared_ctx.chunk_load_radius * shared_ctx.chunk_load_radius;
         let mut canceled_count = 0;
 
-        for (index, task) in chunk_generate_queue.iter().enumerate() {
-            let chunk_pos = task.chunk_pos();
+        // Find the index, after which, all chunks in the queue are beyond the load radius.
+        let idx = shared_ctx.chunk_generate_queue.partition_point(|chunk_pos| {
+            let dist_sq = distance_sq_between_chunks(*chunk_pos, center_chunk_pos);
+            dist_sq < r2
+        });
 
-            if distance_sq_between_chunks(*chunk_pos, center_chunk_pos) >= r2 {
-                // The queue is sorted by distance. If we encounter a chunk too far away, all remaining chunks are also too far away.
-                // Pop off all remaining items at the end of the queue
-                while chunk_generate_queue.len() > index {
-                    if let Some(task) = chunk_generate_queue.pop_back() {
-                        canceled_callback_fn(*task.chunk_pos());
-                    }
-                    canceled_count += 1;
-                }
-                break;
+        // Cancel the chunks outside the load radius
+        for i in idx..shared_ctx.chunk_generate_queue.len() {
+            let chunk_pos = shared_ctx.chunk_generate_queue[i];
+            shared_ctx.chunk_tasks.remove(&chunk_pos);
+            canceled_callback_fn(chunk_pos);
+            canceled_count += 1;
+        }
+        shared_ctx.chunk_generate_queue.truncate(idx);
+
+
+        // In-place removal of duplicate entries.
+        let mut write = 0;
+        for read in 0..shared_ctx.chunk_generate_queue.len() {
+            if write == 0 || shared_ctx.chunk_generate_queue[read] != shared_ctx.chunk_generate_queue[write - 1] {
+                shared_ctx.chunk_generate_queue[write] = shared_ctx.chunk_generate_queue[read];
+                write += 1;
             }
         }
+        // let dup_count = shared_ctx.chunk_generate_queue.len() - write;
+        // if canceled_count > 0 || dup_count > 0 {
+        //     debug!("cleanup_chunk_generate_queue() - Canceled {canceled_count}, Removed {dup_count} duplicates");
+        // }
+
+        shared_ctx.chunk_generate_queue.truncate(write);
 
         canceled_count
     }
 
-    fn cleanup_chunk_mesh_queue<F>(center_chunk_pos: IVec3, chunk_load_radius: f64, chunk_mesh_queue: &mut VecDeque<ChunkLoadTask>, mut canceled_callback_fn: F) -> usize
+    fn cleanup_chunk_mesh_queue<F>(center_chunk_pos: IVec3, shared_ctx: &mut MutexGuard<ChunkLoaderSharedContext>, mut canceled_callback_fn: F) -> usize
     where F: FnMut(IVec3) {
-        let r2 = chunk_load_radius * chunk_load_radius;
+        let r2 = shared_ctx.chunk_load_radius * shared_ctx.chunk_load_radius;
         let mut canceled_count = 0;
 
-        for (index, task) in chunk_mesh_queue.iter().enumerate() {
+        // Find the index, after which, all chunks in the queue are beyond the load radius.
+        let idx = shared_ctx.chunk_mesh_queue.partition_point(|chunk_pos| {
+            let dist_sq = distance_sq_between_chunks(*chunk_pos, center_chunk_pos);
+            dist_sq < r2
+        });
 
-            if distance_sq_between_chunks(*task.chunk_pos(), center_chunk_pos) >= r2 {
-                // The queue is sorted by distance. If we encounter a chunk too far away, all remaining chunks are also too far away.
-                // Pop off all remaining items at the end of the queue
-                while chunk_mesh_queue.len() > index {
-                    if let Some(chunk) = chunk_mesh_queue.pop_back() {
-                        canceled_callback_fn(*chunk.chunk_pos());
-                    }
-                    canceled_count += 1;
-                }
-                break;
+        // Cancel the chunks outside the load radius
+        for i in idx..shared_ctx.chunk_mesh_queue.len() {
+            let chunk_pos = shared_ctx.chunk_mesh_queue[i];
+            shared_ctx.chunk_tasks.remove(&chunk_pos);
+            canceled_callback_fn(chunk_pos);
+            canceled_count += 1;
+        }
+        shared_ctx.chunk_mesh_queue.truncate(idx);
+
+        // In-place removal of duplicate entries.
+        let mut write = 0;
+        for read in 0..shared_ctx.chunk_mesh_queue.len() {
+            if write == 0 || shared_ctx.chunk_mesh_queue[read] != shared_ctx.chunk_mesh_queue[write - 1] {
+                shared_ctx.chunk_mesh_queue[write] = shared_ctx.chunk_mesh_queue[read];
+                write += 1;
             }
         }
 
@@ -794,7 +904,7 @@ impl ChunkLoaderThreadWrapper {
 }
 
 
-impl Drop for ChunkLoader {
+impl Drop for ChunkManager {
     fn drop(&mut self) {
         info!("ChunkLoader - Dropping everything");
 

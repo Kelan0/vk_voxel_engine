@@ -1,7 +1,7 @@
 pub mod voxel_world;
 pub mod world_generator;
 pub mod noise;
-pub mod chunk_loader;
+pub mod chunk_manager;
 mod spatial_partitioning;
 
 pub use voxel_world::world::*;

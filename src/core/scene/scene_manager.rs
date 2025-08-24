@@ -1,4 +1,4 @@
-use crate::application::Ticker;
+use crate::application::{Key, Ticker};
 use crate::core::{Engine, WorldGenerator};
 use anyhow::Result;
 use bevy_ecs::bundle::Bundle;
@@ -10,6 +10,7 @@ use crate::{function_name, profile_scope_fn};
 pub struct Scene {
     pub ecs: World,
     pub world: VoxelWorld,
+    debug_render_enabled: bool,
 }
 
 #[derive(Component)]
@@ -47,7 +48,8 @@ impl Scene {
         let world = VoxelWorld::new(world_generator);
         Ok(Scene {
             ecs,
-            world
+            world,
+            debug_render_enabled: false,
         })
     }
 
@@ -95,8 +97,15 @@ impl Scene {
     pub fn render(&mut self, ticker: &mut Ticker, engine: &mut Engine) -> Result<()> {
         profile_scope_fn!(&engine.frame_profiler);
 
+        if engine.window.input().key_pressed(Key::F2) {
+            self.debug_render_enabled = !self.debug_render_enabled;
+        }
+
         self.world.update(ticker, engine)?;
-        self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
+
+        if self.debug_render_enabled {
+            self.world.draw_debug(engine.scene_renderer.debug_render_context())?;
+        }
 
         Ok(())
     }
